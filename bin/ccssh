@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+# ccssh — choose a host, folder and branch, then run Claude Code there.
+set -uo pipefail
+
+CCSSH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+for _module in lib hosts picker probe auth install folders worktree memory relay session; do
+  # shellcheck source=/dev/null
+  . "$CCSSH_ROOT/scripts/$_module.sh"
+done
+
+CCSSH_VERSION_STRING="0.1.0"
+CCSSH_DRY_RUN="${CCSSH_DRY_RUN:-0}"
+
+usage() {
+  cat <<'EOF'
+ccssh — SSH sessions for the Claude Code CLI
+
+  ccssh                choose where to work
+  ccssh <host>         go straight to a host
+  ccssh --local        run Claude Code here
+  ccssh --dry-run      walk through the choices, change nothing
+  ccssh --forget       forget what this project remembers
+  ccssh --version      print the version
+
+Where you last worked on a project is remembered per directory, so running
+ccssh again from the same folder offers that host, directory and branch first.
+EOF
+}
+
+# --- selection --------------------------------------------------------------
+
+# Parallel arrays: what the user sees, and what it means.
+labels=()
+values=()
+
+add_choice() {
+  labels+=("$1")
+  values+=("$2")
+}
+
+# value_for <chosen-label>
+value_for() {
+  local i
+  for i in "${!labels[@]}"; do
+    if [ "${labels[$i]}" = "$1" ]; then
+      printf '%s\n' "${values[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+choose_host() {
+  local chosen host recalled_label=''
+
+  if [ -n "$recalled_host" ]; then
+    recalled_label="★ $recalled_host · $(basename "$recalled_dir")"
+    [ -n "$recalled_branch" ] && recalled_label="$recalled_label · $recalled_branch"
+    add_choice "$recalled_label" "resume"
+  fi
+
+  add_choice "▪ Local" "local"
+
+  while IFS= read -r host; do
+    [ -n "$host" ] || continue
+    [ "$host" = "$recalled_host" ] && continue
+    add_choice "◆ $host" "$host"
+  done < <(ccssh_list_hosts)
+
+  if [ "${#labels[@]}" -le 1 ]; then
+    die "setup" "no SSH hosts found in ~/.ssh/config" \
+      "add a Host entry, or run: ccssh --local"
+  fi
+
+  chosen="$(ccssh_pick "Where do you want to work?" "${labels[@]}")" || exit 130
+  [ -n "$chosen" ] || exit 130
+  value_for "$chosen"
+}
+
+choose_folder() {
+  local host="$1" chosen typed
+  local -a options=()
+
+  while IFS= read -r line; do
+    [ -n "$line" ] && options+=("$line")
+  done < <(ccssh_list_repos "$host")
+
+  options+=("… type a path")
+
+  chosen="$(ccssh_pick "Folder on $host?" "${options[@]}")" || exit 130
+  [ -n "$chosen" ] || exit 130
+
+  if [ "$chosen" = "… type a path" ]; then
+    typed="$(ccssh_prompt "Path on $host:")" || exit 130
+    [ -n "$typed" ] || die "folder" "no path given"
+    typed="$(ccssh_expand_home "$typed" "$CCSSH_HOME")"
+    ccssh_dir_exists "$host" "$typed" ||
+      die "folder" "$typed does not exist on $host"
+    printf '%s\n' "$typed"
+    return 0
+  fi
+
+  printf '%s\n' "$chosen"
+}
+
+# choose_branch <host> <repo> — prints "branch<TAB>path", empty for the repo itself.
+choose_branch() {
+  local host="$1" repo="$2" current chosen branch path
+  local -a options=()
+
+  current="$(ccssh_current_branch "$host" "$repo")"
+  options+=("● current${current:+ ($current)}")
+
+  while IFS=$'\t' read -r branch path; do
+    [ -n "$branch" ] && options+=("⌥ $branch")
+  done < <(ccssh_worktree_list "$host" "$repo")
+
+  options+=("+ new worktree")
+
+  chosen="$(ccssh_pick "Branch in $(basename "$repo")?" "${options[@]}")" || exit 130
+  [ -n "$chosen" ] || exit 130
+
+  case "$chosen" in
+    "● current"*)
+      return 0
+      ;;
+    "+ new worktree")
+      branch="$(ccssh_prompt "New branch name:")" || exit 130
+      ccssh_branch_valid "$branch" ||
+        die "worktree" "'$branch' is not a usable branch name" \
+          "avoid spaces, leading slashes and '..'"
+      path="$(ccssh_worktree_path "$repo" "$branch")" ||
+        die "worktree" "could not place a worktree for '$branch'"
+      info "creating worktree at $path"
+      ccssh_worktree_create "$host" "$repo" "$branch" "$path" ||
+        die "worktree" "git could not create the worktree" \
+          "check that $repo is a clean git repository on $host"
+      ok "worktree ready"
+      printf '%s\t%s\n' "$branch" "$path"
+      ;;
+    *)
+      branch="${chosen#⌥ }"
+      while IFS=$'\t' read -r b p; do
+        if [ "$b" = "$branch" ]; then
+          printf '%s\t%s\n' "$b" "$p"
+          return 0
+        fi
+      done < <(ccssh_worktree_list "$host" "$repo")
+      die "worktree" "worktree for '$branch' vanished"
+      ;;
+  esac
+}
+
+# --- connecting -------------------------------------------------------------
+
+prepare_remote() {
+  local host="$1"
+
+  info "connecting to ${host}…"
+  ccssh_probe "$host" ||
+    die "connect" "cannot reach $host" "check it manually with: ssh $host"
+
+  ccssh_platform_supported ||
+    die "probe" "unsupported remote platform: ${CCSSH_OS:-unknown}" \
+      "ccssh v1 supports Linux and macOS hosts"
+
+  [ -n "$CCSSH_PYTHON" ] ||
+    die "probe" "python3 is not installed on $host" \
+      "it is needed to install the credential safely"
+
+  [ -n "$CCSSH_GIT" ] || warn "git not found on $host — branch selection is unavailable"
+
+  if [ -z "$CCSSH_CLAUDE" ]; then
+    if [ "$CCSSH_DRY_RUN" = "1" ]; then
+      info "would install Claude Code on $host"
+    else
+      warn "Claude Code is not installed on $host — installing it now"
+      ccssh_install_claude "$host" ||
+        die "install" "the installer did not leave a working claude on $host" \
+          "install it manually there, then run ccssh again"
+      ccssh_probe "$host" || die "probe" "lost contact with $host after installing"
+      ok "claude ${CCSSH_VERSION:-ready} on $host"
+    fi
+  else
+    ok "claude ${CCSSH_VERSION:-ready} on $host"
+  fi
+
+  if [ "$CCSSH_DRY_RUN" = "1" ]; then
+    local hours=''
+    hours="$(ccssh_read_credential 2>/dev/null | ccssh_credential_hours_left)" || true
+    if [ -n "$hours" ]; then
+      info "would forward credentials (access token valid for ${hours}h)"
+    else
+      info "would forward credentials"
+    fi
+    return 0
+  fi
+
+  ccssh_forward_credential "$host" ||
+    warn "run 'claude' once on $host to log in"
+}
+
+run_remote() {
+  local host="$1" dir="$2" branch="${3:-}" worktree="${4:-}"
+  local workdir="$dir" session relay_pid='' status=0
+
+  [ -n "$worktree" ] && workdir="$worktree"
+  session="$(ccssh_session_name "$dir" "$branch")"
+
+  # Catch a bad path here, where we can say which one and why, rather than
+  # letting the remote shell fail with a bare "no such file or directory".
+  ccssh_dir_exists "$host" "$workdir" ||
+    die "session" "$workdir does not exist on $host" \
+      "run: ccssh --forget    then pick the folder again"
+
+  if [ "$CCSSH_DRY_RUN" = "1" ]; then
+    log ""
+    if [ "$CCSSH_FORWARDED" = "1" ] && ! ccssh_renewal_enabled "$host"; then
+      info "would relay renewed tokens every $((CCSSH_RELAY_INTERVAL / 60))m while the session runs"
+    fi
+    info "would remember: $host  $dir${branch:+  ($branch)}"
+    if [ -n "$CCSSH_TMUX" ]; then
+      info "would run: ssh -t $host \"cd $workdir && exec tmux new -As $session claude\""
+    else
+      info "would run: ssh -t $host \"cd $workdir && exec claude\"  (no tmux on host)"
+    fi
+    log ""
+    ok "dry run — nothing was changed on $host"
+    return 0
+  fi
+
+  ccssh_memory_put "$PWD" "$host" "$dir" "$branch" "$worktree"
+
+  # While the session runs, keep the remote in step with whatever token this
+  # machine holds. Pointless when the remote renews itself, and nothing to
+  # relay when forwarding is off for this host.
+  if [ "$CCSSH_FORWARDED" = "1" ] && ! ccssh_renewal_enabled "$host"; then
+    relay_pid="$(ccssh_relay_start "$host" "$CCSSH_FORWARDED_EXPIRY" "$$")"
+    trap 'ccssh_relay_stop "$relay_pid"' EXIT INT TERM
+  fi
+
+  log ""
+  ccssh_run_session "$host" "$workdir" "$CCSSH_TMUX" "$session" || status=$?
+
+  ccssh_relay_stop "$relay_pid"
+  trap - EXIT INT TERM
+  exit "$status"
+}
+
+run_local() {
+  command -v claude >/dev/null 2>&1 ||
+    die "local" "claude is not installed here" "see https://claude.ai/install.sh"
+  exec claude
+}
+
+# --- entry point ------------------------------------------------------------
+
+main() {
+  local target='' host dir branch='' worktree='' selection recalled
+
+  case "${1:-}" in
+    -h|--help)    usage; exit 0 ;;
+    --version)    printf 'ccssh %s\n' "$CCSSH_VERSION_STRING"; exit 0 ;;
+    --local)      run_local ;;
+    --dry-run)    CCSSH_DRY_RUN=1; shift; target="${1:-}" ;;
+    --forget)     ccssh_memory_forget "$PWD"; ok "forgot the connection for $PWD"; exit 0 ;;
+    -*)           usage; die "usage" "unknown option: $1" ;;
+    '')           ;;
+    *)            target="$1" ;;
+  esac
+
+  require_cmd ssh
+  require_cmd python3 "install python3 locally to shape credentials"
+
+  recalled="$(ccssh_memory_get "$PWD")"
+  IFS=$'\t' read -r recalled_host recalled_dir recalled_branch recalled_worktree \
+    <<<"${recalled:-$'\t\t\t'}"
+
+  if [ -n "$target" ]; then
+    selection="$target"
+  else
+    selection="$(choose_host)" || exit 130
+  fi
+
+  case "$selection" in
+    local)
+      run_local
+      ;;
+    resume)
+      host="$recalled_host"
+      branch="$recalled_branch"
+      prepare_remote "$host"
+
+      # Older entries may hold a ~ path, and the remote home is only known
+      # once the probe has run.
+      dir="$(ccssh_expand_home "$recalled_dir" "$CCSSH_HOME")"
+      worktree="$(ccssh_expand_home "$recalled_worktree" "$CCSSH_HOME")"
+
+      if ! ccssh_dir_exists "$host" "$dir"; then
+        warn "the remembered folder $dir is gone — choose another"
+        dir="$(choose_folder "$host")" || exit 130
+        branch=''; worktree=''
+        if [ -n "$CCSSH_GIT" ] && ccssh_is_repo "$host" "$dir"; then
+          IFS=$'\t' read -r branch worktree < <(choose_branch "$host" "$dir")
+        fi
+      elif [ -n "$worktree" ] && ! ccssh_dir_exists "$host" "$worktree"; then
+        warn "the remembered worktree is gone — using $dir instead"
+        branch=''; worktree=''
+      fi
+      run_remote "$host" "$dir" "$branch" "$worktree"
+      ;;
+    *)
+      host="$selection"
+      prepare_remote "$host"
+      dir="$(choose_folder "$host")" || exit 130
+      if [ -n "$CCSSH_GIT" ] && ccssh_is_repo "$host" "$dir"; then
+        IFS=$'\t' read -r branch worktree < <(choose_branch "$host" "$dir")
+      fi
+      run_remote "$host" "$dir" "$branch" "$worktree"
+      ;;
+  esac
+}
+
+main "$@"
