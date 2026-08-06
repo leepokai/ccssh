@@ -220,6 +220,45 @@ if printf '%s\n' "$listing" | grep -qx "$HOME_ON_HOST/.ssh"; then
     "RESULT=[$HOME_ON_HOST/.ssh]" "$(type_folder "ssh\n")"
 fi
 
+# Tab writes the directory onto the line in the ~ form it is displayed in,
+# while the listing holds absolute paths — so the line has to be expanded
+# before matching, or taking a directory leaves you with nothing selected.
+if printf '%s\n' "$listing" | grep -qx "$HOME_ON_HOST/.ssh"; then
+  tabbed="$(type_folder "ssh\t\n")"
+  check "Tab leaves the directory still matching" \
+    "RESULT=[$HOME_ON_HOST/.ssh]" "$tabbed"
+fi
+
+# The cursor has to come to rest where the next character will land, not out
+# past the counter on the right-hand edge.
+# Enter, not Ctrl-C: the terminal driver turns Ctrl-C into a signal before it
+# ever reaches the program, so the picker would die before drawing anything.
+# Enter breaks the loop without redrawing, leaving the last frame typed.
+rawfile="$CCSSH_STATE_DIR/cursor.$$"
+( printf 'ssh\n' | script -q /dev/null /bin/bash "$driver" > "$rawfile" 2>&1 ) &
+rawpid=$!
+rawwait=0
+while kill -0 "$rawpid" 2>/dev/null && [ "$rawwait" -lt "$CCSSH_E2E_TIMEOUT" ]; do
+  sleep 1; rawwait=$((rawwait + 1))
+done
+kill -9 "$rawpid" 2>/dev/null
+wait "$rawpid" 2>/dev/null
+
+# Read the file directly: routing terminal bytes through a shell variable
+# mangles them.
+check "the cursor rests at the end of the line" "yes" \
+  "$(python3 -c '
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    data = handle.read()
+
+index = data.rfind(b"\x1b[s")
+before = data[max(0, index - 8):index] if index >= 0 else b""
+print("yes" if before.endswith(b"ssh") else "no")
+' "$rawfile")"
+rm -f "$rawfile"
+
 check "something matching nothing is taken as typed" \
   "RESULT=[ccssh-no-such-thing]" "$(type_folder "ccssh-no-such-thing\n")"
 

@@ -134,12 +134,18 @@ ccssh_pick_folder() {
   fi
 
   listing="$(mktemp)"
+  # Ctrl-C reaches the terminal driver as a signal, not as a byte we could
+  # handle in the read loop — so the cleanup has to hang off a trap or the
+  # listing is left behind and the cursor never gets its line back.
+  trap 'printf "\033[J\n" >&4 2>/dev/null; rm -f "$listing"' INT TERM
+
   status "$host · reading directories"
   ccssh_list_dirs "$host" > "$listing"
   status_clear
   total="$(wc -l < "$listing" | tr -d ' ')"
 
   _finish() {
+    trap - INT TERM
     printf '\033[J\n' >&4
     exec 3<&- 4>&-
     rm -f "$listing"
@@ -178,9 +184,13 @@ ccssh_pick_folder() {
         sub(/^\./, "", bare)
         needle = fold ? tolower(q) : q
         hay    = fold ? tolower(bare) : bare
-        if (index(hay, needle) == 1)  rank = 0    # the name starts with it
-        else if (index(hay, needle))  rank = 1    # the name contains it
-        else                          rank = 2    # only the path does
+        full   = fold ? tolower($0) : $0
+        # A line naming a directory should bring that directory and everything
+        # under it to the front, which is what happens after Tab.
+        if (index(full, needle) == 1) rank = 0    # the path starts with it
+        else if (index(hay, needle) == 1) rank = 1  # the name starts with it
+        else if (index(hay, needle))  rank = 2    # the name contains it
+        else                          rank = 3    # only the path does
         print rank "\t" length($0) "\t" $0
       }
     ' | sort -t "$(printf '\t')" -k1,1n -k2,2n | cut -f3-
@@ -192,16 +202,17 @@ ccssh_pick_folder() {
   _refilter() {
     local needle pattern
     matches=()
+    # The line is kept in the form you see — ~/… — but the listing holds
+    # absolute paths, so expand before matching. This is also what makes a
+    # directory you just took with Tab show its children: the expanded line is
+    # a prefix of every one of them.
     [ -n "$buffer" ] || {
       while IFS= read -r line; do matches+=("$line"); done < "$listing"
       selected=0
       return
     }
 
-    case "$buffer" in
-      *[A-Z]*) needle="$buffer"; pattern='' ;;
-      *)       needle="$buffer" ;;
-    esac
+    needle="$(_full "$buffer")"
 
     pattern="$(printf '%s' "$needle" | sed 's/[][\.*^$/]/\\&/g; s/./&.*/g')"
     pattern="${pattern%.\*}"
@@ -230,10 +241,14 @@ ccssh_pick_folder() {
     pad=$(( width - ${#prompt} - ${#buffer} - ${#count} - 4 ))
     [ "$pad" -lt 1 ] && pad=1
 
-    printf '\r\033[2K  %s%s%s%s%*s%s%s%s' \
-      "$_c_dim" "$prompt" "$_c_reset" "$buffer" \
+    # Save the cursor at the end of what was typed, before the counter is
+    # drawn — otherwise it comes to rest out past the right-hand column,
+    # nowhere near the character you are about to add.
+    printf '\r\033[2K  %s%s%s%s' \
+      "$_c_dim" "$prompt" "$_c_reset" "$buffer" >&4
+    printf '\033[s' >&4
+    printf '%*s%s%s%s\033[J' \
       "$pad" '' "$_c_dim" "$count" "$_c_reset" >&4
-    printf '\033[s\033[J' >&4
 
     shown=0
     for i in "${!matches[@]}"; do
