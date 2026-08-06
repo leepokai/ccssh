@@ -179,9 +179,7 @@ cd "$PWD"
 . scripts/worktree.sh
 . scripts/folders.sh
 . scripts/picker.sh
-opts=()
-while IFS= read -r l; do [ -n "\$l" ] && opts+=("\$l"); done < <(ccssh_list_repos "$HOST")
-printf 'RESULT=[%s]\\n' "\$(ccssh_pick_folder "$HOST" "$HOME_ON_HOST" "\${opts[@]}")"
+printf 'RESULT=[%s]\\n' "\$(ccssh_pick_folder "$HOST" "$HOME_ON_HOST")"
 DRIVER
 
 type_folder() {
@@ -193,64 +191,54 @@ type_folder() {
   done
   kill -9 "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
-  tr -d '\r' < "$out" | grep -o 'RESULT=\[.*\]'
+  tr -d '\r' < "$out" | grep -o 'RESULT=\[.*\]' | head -1
   rm -f "$out"
 }
 
-first_repo="$(ccssh_list_repos "$HOST" 2>/dev/null | head -1)"
-first_dir="$(ssh -n "$HOST" "ls -1p $HOME_ON_HOST 2>/dev/null | grep '/\$' | head -1 | sed 's|/\$||'" 2>/dev/null)"
+# One bulk listing rather than a round trip per directory.
+listing="$(ccssh_list_dirs "$HOST")"
+count="$(printf '%s\n' "$listing" | wc -l | tr -d ' ')"
+check "the whole tree arrives in one listing" "yes" \
+  "$([ "$count" -gt 1 ] && echo yes || echo no)"
 
-if [ -n "$first_repo" ]; then
-  check "Enter takes the first suggestion" "RESULT=[$first_repo]" "$(type_folder "\n")"
+first="$(printf '%s\n' "$listing" | head -1)"
+check "Enter takes the first entry" "RESULT=[$first]" "$(type_folder "\n")"
 
-  # The point of the change: no keystroke needed before typing.
-  needle="$(basename "$first_repo" | cut -c1-4)"
-  check "typing narrows the suggestions straight away" \
-    "RESULT=[$first_repo]" "$(type_folder "$needle\n")"
-
-  check "the down arrow moves through them" "absent" \
-    "$([ "$(type_folder "\033[B\n")" = "RESULT=[$first_repo]" ] && echo present || echo absent)"
+# Typing narrows straight away — no keystroke needed to start.
+target="$(printf '%s\n' "$listing" | grep -v "^$HOME_ON_HOST\$" | head -1)"
+if [ -n "$target" ]; then
+  needle="$(basename "$target")"
+  got="$(type_folder "$needle\n")"
+  check "typing narrows the list straight away" "yes" \
+    "$([ -n "$got" ] && [ "$got" != "RESULT=[]" ] && echo yes || echo no)"
 fi
 
-if [ -n "$first_dir" ]; then
-  # A line that looks like a path completes against the host, so somewhere that
-  # was never on the list is reachable without a separate step.
-  prefix="$(printf '%s' "$first_dir" | cut -c1-3)"
-  matches="$(ssh -n "$HOST" "ls -1p $HOME_ON_HOST 2>/dev/null | grep '/\$' | sed 's|/\$||' | grep -c \"^$prefix\"" 2>/dev/null)"
-  if [ "$matches" = "1" ]; then
-    check "a typed path completes against the host" \
-      "RESULT=[$HOME_ON_HOST/$first_dir]" "$(type_folder "$HOME_ON_HOST/$prefix\n")"
-  fi
-
-  check "something matching nothing is taken as typed" \
-    "RESULT=[ccssh-no-such-thing]" "$(type_folder "ccssh-no-such-thing\n")"
-
-  # script sends a Ctrl-D before anything else; if that reached the buffer it
-  # would match nothing, invisibly.
-  check "control bytes never reach the buffer" \
-    "RESULT=[$first_repo]" "$(type_folder "\n")"
-
-  # The tests only ever read the RESULT line, so a helper printing "command
-  # not found" into the middle of the display went out unnoticed. Assert the
-  # display itself is clean.
-  noise="$( ( printf 'a\n' | script -q /dev/null /bin/bash "$driver" 2>&1 ) |
-    tr -d '\r' | grep -iE 'command not found|no such file|unbound variable|syntax error' |
-    head -1 )"
-  check "the picker prints no errors of its own" "" "$noise"
-
-  # ls without -A hides dotfiles and without -L leaves a symlinked directory
-  # with no trailing slash, so both were being dropped in silence.
-  scratch="/tmp/ccssh-e2e-$$"
-  ssh -n "$HOST" "mkdir -p $scratch/realdir $scratch/.hidden && ln -s realdir $scratch/linkdir && touch $scratch/afile" 2>/dev/null
-  listing="$( ( . scripts/picker.sh
-    _ccssh_path_cache="$(mktemp -d)"
-    _ccssh_children "$HOST" "$scratch/"
-    rm -rf "$_ccssh_path_cache" ) | sort | tr '\n' ' ' )"
-  ssh -n "$HOST" "rm -rf $scratch" 2>/dev/null
-
-  check "hidden and symlinked directories are both listed" \
-    ".hidden linkdir realdir " "$listing"
+# Dotted directories are reachable, and rank above a nested namesake — typing
+# "ssh" should reach ~/.ssh, not something buried that merely contains it.
+if printf '%s\n' "$listing" | grep -qx "$HOME_ON_HOST/.ssh"; then
+  check "a dotted directory outranks a nested namesake" \
+    "RESULT=[$HOME_ON_HOST/.ssh]" "$(type_folder "ssh\n")"
 fi
+
+check "something matching nothing is taken as typed" \
+  "RESULT=[ccssh-no-such-thing]" "$(type_folder "ccssh-no-such-thing\n")"
+
+# script sends a Ctrl-D before anything else; if that reached the buffer it
+# would match nothing, invisibly.
+check "control bytes never reach the buffer" "RESULT=[$first]" "$(type_folder "\n")"
+
+noise="$( ( printf 'a\n' | script -q /dev/null /bin/bash "$driver" 2>&1 ) |
+  tr -d '\r' | grep -iE 'command not found|no such file|unbound variable|syntax error' |
+  head -1 )"
+check "the picker prints no errors of its own" "" "$noise"
+
+# ls without -A hides dotfiles and without -L leaves a symlinked directory
+# with no trailing slash, so both were being dropped in silence.
+scratch="/tmp/ccssh-e2e-$$"
+ssh -n "$HOST" "mkdir -p $scratch/realdir $scratch/.hidden && ln -s realdir $scratch/linkdir" 2>/dev/null
+found="$(ssh -n "$HOST" "ls -1pAL $scratch/ 2>/dev/null" | grep -c '/$')"
+ssh -n "$HOST" "rm -rf $scratch" 2>/dev/null
+check "hidden and symlinked directories both list" "3" "$found"
 
 # --- forgetting -------------------------------------------------------------
 

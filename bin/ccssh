@@ -126,18 +126,13 @@ choose_host() {
 }
 
 choose_folder() {
-  local host="$1" chosen
-  local -a options=()
-
-  while IFS= read -r line; do
-    [ -n "$line" ] && options+=("$line")
-  done < <(ccssh_list_repos "$host")
+  local host="$1" chosen status=0
 
   status_clear
-  chosen="$(ccssh_pick_folder "$host" "$CCSSH_HOME" "${options[@]}")" || exit 130
+  chosen="$(ccssh_pick_folder "$host" "$CCSSH_HOME")" || status=$?
+  [ "$status" = "130" ] && exit 130
   [ -n "$chosen" ] || exit 130
 
-  chosen="$(ccssh_expand_home "$chosen" "$CCSSH_HOME")"
   ccssh_dir_exists "$host" "$chosen" ||
     die "folder" "$chosen does not exist on $host"
   printf '%s

@@ -100,35 +100,6 @@ ccssh_prompt() {
 
 # --- choosing a directory ---------------------------------------------------
 
-# Directories under <dir> on <host>, cached: walking back up a path you have
-# already visited should not cost another round trip.
-_ccssh_children() {
-  local host="$1" dir="$2" file
-  file="$_ccssh_path_cache/$(printf '%s' "$dir" | ccssh_sha256 | cut -c1-16)"
-  if [ ! -f "$file" ]; then
-    # -A includes dotfiles, without which ~/.config is simply unreachable.
-    # -L resolves symlinks, without which a symlinked directory has no
-    # trailing slash and the filter below drops it silently. bash-completion
-    # uses -aF1dL and zsh -d1FL for exactly these two reasons.
-    #
-    # -n keeps ssh from swallowing the keystrokes still queued on stdin.
-    # Multiplexing is passed explicitly rather than assumed: without a master
-    # connection every directory you walk into costs a full handshake, and
-    # most people have not configured one. BatchMode keeps a stalled auth
-    # prompt from freezing the picker — bash-completion and zsh both do the
-    # same and simply return nothing.
-    ssh -n \
-      -o ControlMaster=auto \
-      -o ControlPath="$HOME/.ssh/sockets/%C" \
-      -o ControlPersist=10m \
-      -o BatchMode=yes \
-      -o ConnectTimeout=5 \
-      "$host" "ls -1pAL $(ccssh_shq "$dir") 2>/dev/null" 2>/dev/null |
-      grep '/$' | sed 's|/$||' > "$file" || true
-  fi
-  cat "$file" 2>/dev/null
-}
-
 # The longest prefix every candidate shares.
 _ccssh_common_prefix() {
   python3 -c '
@@ -139,18 +110,22 @@ print(os.path.commonprefix(lines) if lines else "")
 '
 }
 
-# ccssh_pick_folder <host> <home> [suggestion]...
+# ccssh_pick_folder <host> <home>
 #
-# One input rather than a list and then a prompt. The suggestions are there to
-# begin with, typing narrows them, and a line starting with / or ~ switches to
-# completing against the host itself — so reaching somewhere that was never on
-# the list costs no extra step. Tab takes the highlighted entry onto the line,
-# which is how you descend.
+# One flat list of every directory under the remote home, fetched once, then
+# filtered here. Asking the host per directory costs a round trip each time you
+# walk into one; asking once costs about a third of a second and makes typing,
+# backtracking and jumping somewhere unrelated all free.
+#
+# There is deliberately no second mode for paths. fzf's own completion walks up
+# with dirname until it finds a directory that exists and treats the rest as the
+# query — one rule, nothing that changes under you. A single flat list gets the
+# same result with no rule at all.
 ccssh_pick_folder() {
-  local host="$1" home="$2"; shift 2
+  local host="$1" home="$2"
   local prompt="Folder on $host: "
-  local buffer='' ch rest dir base line i selected=0 total=0
-  local -a suggestions=("$@") matches=()
+  local buffer='' ch rest line i selected=0 total=0 listing
+  local -a matches=()
 
   if ! { exec 3</dev/tty 4>/dev/tty; } 2>/dev/null; then
     printf 'ccssh needs a terminal to choose a folder.\n' >&2
@@ -158,70 +133,99 @@ ccssh_pick_folder() {
     return 1
   fi
 
-  _ccssh_path_cache="$(mktemp -d)"
+  listing="$(mktemp)"
+  status "$host · reading directories"
+  ccssh_list_dirs "$host" > "$listing"
+  status_clear
+  total="$(wc -l < "$listing" | tr -d ' ')"
 
   _finish() {
     printf '\033[J\n' >&4
     exec 3<&- 4>&-
-    rm -rf "$_ccssh_path_cache"
+    rm -f "$listing"
   }
 
-  # A line that looks like a path is completed against the host; anything else
-  # just narrows what was offered.
-  # Case-insensitive until you type a capital, which is what lf means by
-  # ignorecase plus smartcase, both on by default there.
-  _fold() {
-    case "$buffer" in
-      *[A-Z]*) printf '%s' "$1" ;;
-      *) printf '%s' "$1" | tr '[:upper:]' '[:lower:]' ;;
+  # $HOME shown as ~, the way lf writes its prompt: the home prefix is on
+  # every row and carries no information.
+  _short() {
+    case "$1" in
+      "$home"/*) printf '~/%s' "${1#"$home"/}" ;;
+      "$home")   printf '~' ;;
+      *)         printf '%s' "$1" ;;
     esac
   }
 
+  _full() {
+    case "$1" in
+      '~/'*) printf '%s/%s' "$home" "${1#\~/}" ;;
+      '~')   printf '%s' "$home" ;;
+      *)     printf '%s' "$1" ;;
+    esac
+  }
+
+  # Where the match landed decides the order, then the shorter path wins —
+  # fzf's --scheme=path does the same with --tiebreak=pathname,length.
+  # Without this, typing "mycode" reaches a cache directory that merely
+  # contains the word before it reaches ~/mycode.
+  _rank() {
+    awk -v q="$1" -v fold="$2" '
+      {
+        name = $0
+        sub(/.*\//, "", name)
+        # A leading dot should not cost a directory its place: typing
+        # "config" means ~/.config far more often than some nested src/config.
+        bare = name
+        sub(/^\./, "", bare)
+        needle = fold ? tolower(q) : q
+        hay    = fold ? tolower(bare) : bare
+        if (index(hay, needle) == 1)  rank = 0    # the name starts with it
+        else if (index(hay, needle))  rank = 1    # the name contains it
+        else                          rank = 2    # only the path does
+        print rank "\t" length($0) "\t" $0
+      }
+    ' | sort -t "$(printf '\t')" -k1,1n -k2,2n | cut -f3-
+  }
+
+  # Insensitive until you type a capital — smart-case, which fzf, lf and yazi
+  # all default to. Substring before subsequence, so exact hits lead: without
+  # real scoring, unranked fuzzy ranks worse than plain substring.
   _refilter() {
-    local needle
-    needle="$(_fold "$buffer")"
+    local needle pattern
     matches=()
+    [ -n "$buffer" ] || {
+      while IFS= read -r line; do matches+=("$line"); done < "$listing"
+      selected=0
+      return
+    }
+
     case "$buffer" in
-      '~'*|/*)
-        dir="${buffer%/*}/"
-        case "$buffer" in '~'*) dir="${home}/${dir#\~/}" ;; esac
-        base="${buffer##*/}"
-        while IFS= read -r line; do
-          [ -n "$line" ] || continue
-          case "$(_fold "$line")" in
-            "$(_fold "$base")"*) matches+=("${dir}${line}") ;;
-          esac
-        done < <(_ccssh_children "$host" "$dir")
-        total="${#matches[@]}"
+      *[A-Z]*) needle="$buffer"; pattern='' ;;
+      *)       needle="$buffer" ;;
+    esac
+
+    pattern="$(printf '%s' "$needle" | sed 's/[][\.*^$/]/\\&/g; s/./&.*/g')"
+    pattern="${pattern%.\*}"
+
+    case "$buffer" in
+      *[A-Z]*)
+        while IFS= read -r line; do matches+=("$line"); done \
+          < <( { grep -F -- "$needle" "$listing"
+                 grep -E -- "$pattern" "$listing" | grep -Fv -- "$needle"; } |
+               _rank "$needle" 0 )
         ;;
       *)
-        for line in "${suggestions[@]}"; do
-          case "$(_fold "$line")" in
-            *"$needle"*) matches+=("$line") ;;
-          esac
-        done
-        total="${#suggestions[@]}"
+        while IFS= read -r line; do matches+=("$line"); done \
+          < <( { grep -Fi -- "$needle" "$listing"
+                 grep -Ei -- "$pattern" "$listing" | grep -Fvi -- "$needle"; } |
+               _rank "$needle" 1 )
         ;;
     esac
     selected=0
   }
 
-  # What every candidate shares, shown dim so the eye lands on the part that
-  # differs. lf abbreviates the common leading path rather than truncating
-  # blindly; the same idea, with colour instead of abbreviation.
-  _common() {
-    [ "${#matches[@]}" -gt 1 ] || { printf '\n'; return; }
-    printf '%s\n' "${matches[@]}" | _ccssh_common_prefix
-  }
-
   _draw() {
-    local shared width count rest pad
-    shared="$(_common)"
-    shared="${shared%/*}/"
-    [ "$shared" = "/" ] && shared=''
+    local width count pad shown
     width="$(tput cols 2>/dev/null || echo 80)"
-
-    # A count, the way lf and fzf both carry one: how many of how many.
     count="${#matches[@]}/${total}"
     pad=$(( width - ${#prompt} - ${#buffer} - ${#count} - 4 ))
     [ "$pad" -lt 1 ] && pad=1
@@ -231,17 +235,15 @@ ccssh_pick_folder() {
       "$pad" '' "$_c_dim" "$count" "$_c_reset" >&4
     printf '\033[s\033[J' >&4
 
+    shown=0
     for i in "${!matches[@]}"; do
-      [ "$i" -ge 8 ] && break
-      rest="${matches[$i]#$shared}"
+      [ "$shown" -ge 8 ] && break
       if [ "$i" -eq "$selected" ]; then
-        printf '\n\033[2K  \033[36m>\033[0m %s%s%s\033[1m%s\033[0m' \
-          "$_c_dim" "$shared" "$_c_reset" "$rest" >&4
+        printf '\n\033[2K  \033[36m>\033[0m \033[1m%s\033[0m' "$(_short "${matches[$i]}")" >&4
       else
-        printf '\n\033[2K    %s%s%s%s%s' \
-          "$_c_dim" "$shared" "$_c_reset" "$_c_dim" "$rest" >&4
-        printf '\033[0m' >&4
+        printf '\n\033[2K    %s%s\033[0m' "$_c_dim" "$(_short "${matches[$i]}")" >&4
       fi
+      shown=$((shown + 1))
     done
     [ "${#matches[@]}" -gt 8 ] &&
       printf '\n\033[2K    %s%d more\033[0m' "$_c_dim" "$((${#matches[@]} - 8))" >&4
@@ -257,9 +259,7 @@ ccssh_pick_folder() {
   while IFS= read -rsn1 -u 3 ch; do
     case "$ch" in
       '')
-        if [ "${#matches[@]}" -gt 0 ]; then
-          buffer="${matches[$selected]}"
-        fi
+        [ "${#matches[@]}" -gt 0 ] && buffer="${matches[$selected]}"
         break
         ;;
       $'\177'|$'\b')
@@ -267,15 +267,16 @@ ccssh_pick_folder() {
         _refilter
         ;;
       $'\t')
-        # Take the highlighted entry onto the line; a directory gains a
-        # trailing slash so the next keystroke is already inside it.
+        # Take the highlighted entry, rather than completing to the prefix the
+        # matches share: over a fuzzy result set that prefix is worth nothing —
+        # for /usr/local and /var/log it is "/". fzf made the same call.
         if [ "${#matches[@]}" -gt 0 ]; then
-          buffer="${matches[$selected]}/"
+          buffer="$(_short "${matches[$selected]}")"
           _refilter
         fi
         ;;
-      $'\003')
-        _finish; return 1
+      $'\003'|$'\007')
+        _finish; return 130
         ;;
       $'\033')
         IFS= read -rsn2 -t "$CCSSH_ESCAPE_TIMEOUT" -u 3 rest || rest=''
@@ -284,12 +285,10 @@ ccssh_pick_folder() {
                   selected=$(( (selected - 1 + ${#matches[@]}) % ${#matches[@]} )) ;;
           '[B') [ "${#matches[@]}" -gt 0 ] &&
                   selected=$(( (selected + 1) % ${#matches[@]} )) ;;
-          '')   _finish; return 1 ;;
+          '')   _finish; return 130 ;;
         esac
         ;;
       *)
-        # Only what can be typed: a stray control byte in the buffer would
-        # match nothing, invisibly.
         case "$ch" in
           [[:print:]]) buffer="$buffer$ch"; _refilter ;;
           *) continue ;;
@@ -300,8 +299,11 @@ ccssh_pick_folder() {
   done
 
   _finish
-  case "$buffer" in
-    '~'*) printf '%s\n' "${home}/${buffer#\~/}" ;;
-    *)    printf '%s\n' "$buffer" ;;
-  esac
+  # Nothing matched: hand back what was typed and say so, the way fzf's
+  # --print-query does, so the caller can tell the difference.
+  if [ "${#matches[@]}" -eq 0 ]; then
+    printf '%s\n' "$(_full "$buffer")"
+    return 1
+  fi
+  printf '%s\n' "$(_full "$buffer")"
 }

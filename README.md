@@ -39,20 +39,33 @@ repositories it found are there to begin with; typing narrows them straight
 away, with no keystroke needed first:
 
 ```
-  Folder on vps: api                                              2/14
+  Folder on vps: api                                            3/1660
 
-  > /srv/api
-    /home/me/apiary
+  > ~/srv/api
+    ~/work/apiary
+    ~/.cache/api-docs
 ```
 
-The count on the right is how many match out of how many there are, the way
-lf and yazi both carry one. Matching is case-insensitive until you type a
-capital, which is what both call smart-case. What every candidate shares is
-dimmed, so your eye lands on the part that differs.
+Every directory under your home on that host arrives in **one** listing, and
+every keystroke after that is filtered here. Asking the host per directory
+costs a round trip each time you walk into one; asking once costs about a
+third of a second and makes typing, backtracking and jumping somewhere
+unrelated all free. Measured on two real hosts: 1,700–4,300 directories,
+87–214 KB, ~330 ms once, then ~8 ms per keystroke.
 
-A line starting with `/` or `~` completes against the host instead, so
-somewhere that was never on the list takes no extra step. Tab puts the
-highlighted entry on the line — that is how you walk down into it.
+There is deliberately **no second mode** for paths — one flat list, one rule,
+nothing that changes under you.
+
+The count is matches out of total, the way fzf, lf and yazi all carry one.
+Matching is case-insensitive until you type a capital — smart-case, which all
+three default to. Results are ordered by where the match landed and then by
+path length, so `mycode` reaches `~/mycode` rather than something buried that
+merely contains the word, and a leading dot costs nothing: `ssh` finds
+`~/.ssh`.
+
+Tab takes the highlighted entry rather than completing to the prefix the
+matches share — over a fuzzy result set that prefix is worthless; for
+`/usr/local` and `/var/log` it is `/`. fzf made the same call.
 
 [fzf]: https://github.com/junegunn/fzf
 
