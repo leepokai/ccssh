@@ -33,31 +33,47 @@ contains() {
 
 CCSSH_REMOTE_PATH="/opt/homebrew/bin:/usr/bin:/bin"
 CCSSH_CLAUDE="/Users/someone/.local/bin/claude"
+CCSSH_TMUX="/opt/homebrew/bin/tmux"
+CCSSH_SCREEN=""
 
-cmd="$(ccssh_remote_command "/home/me/proj" "/opt/homebrew/bin/tmux" "ccssh-proj")"
+cmd="$(ccssh_remote_command "/home/me/proj" "ccssh-proj")"
 
 contains "carries the login PATH into the session" "$cmd" "export PATH='/opt/homebrew/bin:/usr/bin:/bin'"
 contains "runs claude by absolute path" "$cmd" "'/Users/someone/.local/bin/claude'"
 contains "runs tmux by absolute path" "$cmd" "'/opt/homebrew/bin/tmux'"
+check "prefers tmux when both are present" "tmux" \
+  "$(CCSSH_SCREEN=/usr/bin/screen ccssh_multiplexer)"
 contains "attaches or creates one named session" "$cmd" "new -As 'ccssh-proj'"
 contains "changes to the working directory" "$cmd" "cd '/home/me/proj'"
 contains "replaces the shell rather than nesting one" "$cmd" "exec "
 
-without_tmux="$(ccssh_remote_command "/home/me/proj" "" "ccssh-proj")"
+CCSSH_TMUX=""
+without_tmux="$(ccssh_remote_command "/home/me/proj" "ccssh-proj")"
 contains "falls back to claude alone without tmux" "$without_tmux" "exec '/Users/someone/.local/bin/claude'"
 case "$without_tmux" in
   *tmux*) check "no tmux in the fallback" "absent" "PRESENT" ;;
   *)      check "no tmux in the fallback" "absent" "absent" ;;
 esac
 
+# screen ships with macOS and most distributions, so persistence still works
+# on hosts where tmux was never installed.
+CCSSH_SCREEN="/usr/bin/screen"
+check "falls back to screen" "screen" "$(ccssh_multiplexer)"
+scr="$(ccssh_remote_command "/home/me/proj" "ccssh-proj")"
+contains "screen reattaches or creates one named session" "$scr" \
+  "'/usr/bin/screen' -DRS 'ccssh-proj'"
+contains "screen runs claude by absolute path" "$scr" "'/Users/someone/.local/bin/claude'"
+CCSSH_SCREEN=""
+check "reports none when neither is present" "none" "$(ccssh_multiplexer)"
+
 # Paths with spaces or quotes must not break out of the command.
-tricky="$(ccssh_remote_command "/home/me/my proj" "" "s")"
+tricky="$(ccssh_remote_command "/home/me/my proj" "s")"
 contains "quotes a path containing spaces" "$tricky" "cd '/home/me/my proj'"
 
 # Falling back to a bare name is only acceptable when the probe found nothing.
 CCSSH_CLAUDE=''
 CCSSH_REMOTE_PATH=''
-bare="$(ccssh_remote_command "/tmp" "" "s")"
+bare="$(ccssh_remote_command "/tmp" "s")"
 contains "degrades to a bare command when unprobed" "$bare" "exec 'claude'"
 
 digest="$(printf '%s' /home/me/proj | ccssh_sha256 | cut -c1-6)"
@@ -90,7 +106,7 @@ check "expands nested paths" "/home/me/a/b/c" \
 
 CCSSH_REMOTE_PATH=''
 CCSSH_CLAUDE=''
-expanded="$(ccssh_remote_command "$(ccssh_expand_home '~/proj' /home/me)" "" s)"
+expanded="$(ccssh_remote_command "$(ccssh_expand_home '~/proj' /home/me)" s)"
 contains "the composed command has no unexpanded tilde" "$expanded" "cd '/home/me/proj'"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"

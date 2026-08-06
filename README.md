@@ -34,7 +34,8 @@ type-to-filter and mouse support.
 - Forwards your login so you never sign in on the remote (see [Credentials](#credentials))
 - Offers the git repositories it finds there, or takes a path you type
 - Offers the branch: the checkout as it stands, an existing worktree, or a new one
-- Wraps the session in tmux, so a dropped connection does not lose your work
+- Wraps the session in tmux, or screen where tmux is missing, so a dropped
+  connection does not lose your work
 - Remembers, per local project directory, where you last worked
 
 ## Install
@@ -196,9 +197,18 @@ and runs it as an ordinary terminal session.
 That difference shows up in three places. The desktop app manages remote CLI
 versions and syncs your plugins across; ccssh does neither. It renews auth
 through its own channel, where ccssh can only relay what this machine has. And
-its session lives in a daemon, where ccssh uses tmux — which in exchange means
-you can `ssh host && tmux attach` from anywhere and land in the same session,
-with no app in the middle.
+its session lives in a daemon, where ccssh uses tmux or screen — which in
+exchange means you can `ssh host && tmux attach` from anywhere and land in the
+same session, with no app in the middle.
+
+## Session persistence
+
+Whichever of tmux or screen the host already has is used, tmux first. Nothing is
+installed for you: on a host with neither, the session simply ends when the
+connection drops, and ccssh says so before starting.
+
+Sessions are named after the directory and branch, with the directory's path
+hashed in so two repositories sharing a name never attach to each other's.
 
 ## Development
 

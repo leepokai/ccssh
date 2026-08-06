@@ -231,11 +231,8 @@ run_remote() {
       info "would relay renewed tokens every $((CCSSH_RELAY_INTERVAL / 60))m while the session runs"
     fi
     info "would remember: $host  $dir${branch:+  ($branch)}"
-    if [ -n "$CCSSH_TMUX" ]; then
-      info "would run: ssh -t $host \"cd $workdir && exec tmux new -As $session claude\""
-    else
-      info "would run: ssh -t $host \"cd $workdir && exec claude\"  (no tmux on host)"
-    fi
+    info "would run: ssh -t $host \"$(ccssh_remote_command "$workdir" "$session")\""
+    info "persistence: $(ccssh_multiplexer)"
     log ""
     ok "dry run — nothing was changed on $host"
     return 0
@@ -252,7 +249,7 @@ run_remote() {
   fi
 
   log ""
-  ccssh_run_session "$host" "$workdir" "$CCSSH_TMUX" "$session" || status=$?
+  ccssh_run_session "$host" "$workdir" "$session" || status=$?
 
   ccssh_relay_stop "$relay_pid"
   trap - EXIT INT TERM

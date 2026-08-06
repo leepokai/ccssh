@@ -24,6 +24,7 @@ ccssh_probe_raw() {
     echo __CLAUDE__; command -v claude 2>/dev/null || true
     echo __VER__;    claude --version 2>/dev/null || true
     echo __TMUX__;   command -v tmux 2>/dev/null || true
+    echo __SCREEN__; command -v screen 2>/dev/null || true
     echo __GIT__;    command -v git 2>/dev/null || true
     echo __PY__;     command -v python3 2>/dev/null || true
     echo __END__
@@ -55,10 +56,11 @@ ccssh_probe() {
   CCSSH_CLAUDE="$(ccssh_probe_field "$raw" CLAUDE)"
   CCSSH_VERSION="$(ccssh_probe_field "$raw" VER)"
   CCSSH_TMUX="$(ccssh_probe_field "$raw" TMUX)"
+  CCSSH_SCREEN="$(ccssh_probe_field "$raw" SCREEN)"
   CCSSH_GIT="$(ccssh_probe_field "$raw" GIT)"
   CCSSH_PYTHON="$(ccssh_probe_field "$raw" PY)"
   export CCSSH_OS CCSSH_ARCH CCSSH_HOME CCSSH_REMOTE_PATH \
-    CCSSH_CLAUDE CCSSH_VERSION CCSSH_TMUX CCSSH_GIT CCSSH_PYTHON
+    CCSSH_CLAUDE CCSSH_VERSION CCSSH_TMUX CCSSH_SCREEN CCSSH_GIT CCSSH_PYTHON
 }
 
 # v1 runs Claude Code itself on the remote, which needs a POSIX host.

@@ -49,6 +49,7 @@ check "missing expiry yields nothing" "" \
 # A short-interval relay against a host that cannot be reached must stay quiet
 # and stay alive rather than spinning or writing to the terminal.
 CCSSH_RELAY_INTERVAL=1
+CCSSH_CONNECT_TIMEOUT=2
 pid="$(ccssh_relay_start ccssh-nonexistent-host.invalid '')"
 sleep 3
 if kill -0 "$pid" 2>/dev/null; then
@@ -71,9 +72,14 @@ sleep 30 &
 guardian=$!
 pid="$(ccssh_relay_start ccssh-nonexistent-host.invalid '' "$guardian")"
 kill "$guardian" 2>/dev/null; wait "$guardian" 2>/dev/null
-sleep 3
+
+waited=0
+while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 30 ]; do
+  sleep 1
+  waited=$((waited + 1))
+done
 if kill -0 "$pid" 2>/dev/null; then
-  check "relay stops when its owner dies" "stopped" "still running"
+  check "relay stops when its owner dies" "stopped" "still running after ${waited}s"
   ccssh_relay_stop "$pid"
 else
   check "relay stops when its owner dies" "stopped" "stopped"

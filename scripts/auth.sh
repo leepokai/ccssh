@@ -202,9 +202,14 @@ print("ok")
 '
 
 # ccssh_push_credential <host> ; payload on stdin
+#
+# The connect timeout matters most for the relay: without it, a host that has
+# gone away leaves the relay blocked in ssh instead of noticing the session
+# ended. An established multiplexed connection is unaffected.
 ccssh_push_credential() {
   local host="$1"
-  ssh "$host" "umask 077; mkdir -p ~/.claude && chmod 700 ~/.claude && python3 -c '$_CCSSH_MERGE_PY'" \
+  ssh -o ConnectTimeout="${CCSSH_CONNECT_TIMEOUT:-10}" "$host" \
+    "umask 077; mkdir -p ~/.claude && chmod 700 ~/.claude && python3 -c '$_CCSSH_MERGE_PY'" \
     >/dev/null
 }
 
