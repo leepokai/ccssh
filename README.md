@@ -34,8 +34,8 @@ type-to-filter and mouse support.
 - Forwards your login so you never sign in on the remote (see [Credentials](#credentials))
 - Offers the git repositories it finds there, or takes a path you type
 - Offers the branch: the checkout as it stands, an existing worktree, or a new one
-- Wraps the session in tmux, or screen where tmux is missing, so a dropped
-  connection does not lose your work
+- Wraps the session in tmux — installing it if the host lacks it — so a dropped
+  connection does not lose your work, and uses mosh where the host has it
 - Remembers, per local project directory, where you last worked
 
 ## Install
@@ -135,6 +135,7 @@ credential is a plain file, so signing in there does carry over.
 |---|---|---|
 | `forwardAuth` | `true` | Send a credential at all |
 | `allowRenewal` | `false` | Also send the refresh token — read below |
+| `useMosh` | `true` | Use mosh when both ends have it |
 
 ### Why `allowRenewal` is off by default
 
@@ -146,8 +147,14 @@ That may log out the remote, or your own machine.
 
 The desktop app avoids this by being the only client that ever touches the
 refresh token. A separate tool cannot make that guarantee. So `allowRenewal`
-trades a known 8-hour limit for an unpredictable one. Use it only where an
-unexpected logout would merely be annoying.
+trades a known 8-hour limit for an unpredictable one.
+
+Worse, it is *your* credential rather than a separate one. Signing in on the
+host also leaves a weeks-long credential there, but a distinct one: if that
+machine is compromised, your own session is untouched and you can deal with it
+independently. A forwarded refresh token has no such separation — whoever holds
+it can keep renewing indefinitely, and each renewal retires the copy you are
+holding. Prefer signing in on the host over turning this on.
 
 To remove a forwarded credential: `ssh <host> 'rm ~/.claude/.credentials.json'`.
 
@@ -197,18 +204,34 @@ and runs it as an ordinary terminal session.
 That difference shows up in three places. The desktop app manages remote CLI
 versions and syncs your plugins across; ccssh does neither. It renews auth
 through its own channel, where ccssh can only relay what this machine has. And
-its session lives in a daemon, where ccssh uses tmux or screen — which in
+its session lives in a daemon, where ccssh uses tmux — which in
 exchange means you can `ssh host && tmux attach` from anywhere and land in the
 same session, with no app in the middle.
 
-## Session persistence
+## Surviving a dropped connection
 
-Whichever of tmux or screen the host already has is used, tmux first. Nothing is
-installed for you: on a host with neither, the session simply ends when the
-connection drops, and ccssh says so before starting.
+Two separate problems, solved separately.
+
+**The session outliving the connection** is tmux's job. Claude Code runs inside
+a tmux session on the host, so when your network dies the session keeps running
+— including any answer it was in the middle of, since that request goes from the
+host, not through your laptop. Run `ccssh` again and you are back where you
+were. tmux is installed for you if the host lacks it (with brew directly, with
+apt/dnf/yum/pacman/apk/zypper after asking, since those need root).
+
+**Reattaching by itself** is [mosh]'s job. Where the host has `mosh-server` and
+you have `mosh`, ccssh uses it: a changed IP, a closed lid or a dead network no
+longer detaches you. It is never installed for you, because it needs UDP
+60000-61000 reachable — on a VPS that means a firewall or security-group change
+only you can make. If mosh cannot connect, ccssh falls back to ssh and says so.
+
+Opt out per host with `"useMosh": false`, or everywhere with `CCSSH_NO_MOSH=1`.
 
 Sessions are named after the directory and branch, with the directory's path
-hashed in so two repositories sharing a name never attach to each other's.
+hashed in so two repositories sharing a name never attach to each other's. That
+also means you can reach one without ccssh at all: `ssh host` then `tmux attach`.
+
+[mosh]: https://mosh.org
 
 ## Development
 

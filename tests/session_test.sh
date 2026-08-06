@@ -34,15 +34,12 @@ contains() {
 CCSSH_REMOTE_PATH="/opt/homebrew/bin:/usr/bin:/bin"
 CCSSH_CLAUDE="/Users/someone/.local/bin/claude"
 CCSSH_TMUX="/opt/homebrew/bin/tmux"
-CCSSH_SCREEN=""
 
 cmd="$(ccssh_remote_command "/home/me/proj" "ccssh-proj")"
 
 contains "carries the login PATH into the session" "$cmd" "export PATH='/opt/homebrew/bin:/usr/bin:/bin'"
 contains "runs claude by absolute path" "$cmd" "'/Users/someone/.local/bin/claude'"
 contains "runs tmux by absolute path" "$cmd" "'/opt/homebrew/bin/tmux'"
-check "prefers tmux when both are present" "tmux" \
-  "$(CCSSH_SCREEN=/usr/bin/screen ccssh_multiplexer)"
 contains "attaches or creates one named session" "$cmd" "new -As 'ccssh-proj'"
 contains "changes to the working directory" "$cmd" "cd '/home/me/proj'"
 contains "replaces the shell rather than nesting one" "$cmd" "exec "
@@ -55,16 +52,20 @@ case "$without_tmux" in
   *)      check "no tmux in the fallback" "absent" "absent" ;;
 esac
 
-# screen ships with macOS and most distributions, so persistence still works
-# on hosts where tmux was never installed.
-CCSSH_SCREEN="/usr/bin/screen"
-check "falls back to screen" "screen" "$(ccssh_multiplexer)"
-scr="$(ccssh_remote_command "/home/me/proj" "ccssh-proj")"
-contains "screen reattaches or creates one named session" "$scr" \
-  "'/usr/bin/screen' -DRS 'ccssh-proj'"
-contains "screen runs claude by absolute path" "$scr" "'/Users/someone/.local/bin/claude'"
-CCSSH_SCREEN=""
-check "reports none when neither is present" "none" "$(ccssh_multiplexer)"
+check "reports none without tmux" "none" "$(ccssh_multiplexer)"
+
+# mosh is used only when both ends have it, and never against a host that has
+# opted out — a VPS with UDP 60000-61000 closed would just hang.
+CCSSH_MOSH_SERVER=""
+check "ssh without mosh-server on the remote" "ssh" "$(ccssh_transport)"
+CCSSH_MOSH_SERVER="/usr/bin/mosh-server"
+if command -v mosh >/dev/null 2>&1; then
+  check "mosh when both ends have it" "mosh" "$(ccssh_transport)"
+else
+  check "ssh when the local mosh is missing" "ssh" "$(ccssh_transport)"
+fi
+check "CCSSH_NO_MOSH forces ssh" "ssh" "$(CCSSH_NO_MOSH=1 ccssh_transport)"
+CCSSH_MOSH_SERVER=""
 
 # Paths with spaces or quotes must not break out of the command.
 tricky="$(ccssh_remote_command "/home/me/my proj" "s")"

@@ -197,6 +197,18 @@ prepare_remote() {
     ok "claude ${CCSSH_VERSION:-ready} on $host"
   fi
 
+  # Persistence is worth a package install: without tmux, a dropped connection
+  # loses the session. Not worth failing over, though.
+  if [ -z "$CCSSH_TMUX" ]; then
+    if [ "$CCSSH_DRY_RUN" = "1" ]; then
+      info "would install tmux on $host"
+    else
+      ccssh_install_tmux "$host" &&
+        ok "tmux installed on $host" ||
+        warn "continuing without tmux — the session ends if the connection drops"
+    fi
+  fi
+
   if [ "$CCSSH_DRY_RUN" = "1" ]; then
     local hours=''
     hours="$(ccssh_read_credential 2>/dev/null | ccssh_credential_hours_left)" || true
@@ -210,6 +222,13 @@ prepare_remote() {
 
   ccssh_forward_credential "$host" ||
     warn "run 'claude' once on $host to log in"
+
+  # mosh is never installed unasked: it needs UDP 60000-61000 open, which on a
+  # VPS is a firewall change only the owner can make.
+  if [ -z "${CCSSH_MOSH_SERVER:-}" ] && command -v mosh >/dev/null 2>&1 &&
+     ccssh_host_option "$host" useMosh true; then
+    info "tip: install mosh on $host and the session will reattach by itself"
+  fi
 }
 
 run_remote() {

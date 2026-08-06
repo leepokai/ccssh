@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Hand the terminal over to Claude Code on the remote host.
 #
-# A multiplexer keeps the session alive across a dropped connection:
-# reconnecting attaches to the same session rather than starting over. tmux is
-# preferred, but screen ships with macOS and most Linux distributions, so
-# falling back to it means persistence usually works with nothing to install.
+# tmux keeps the session alive across a dropped connection: reconnecting
+# attaches to the same session rather than starting over.
+#
+# Only tmux — screen was tried and dropped. The copy Apple ships is from 2006
+# and renders a modern TUI badly, and supporting two multiplexers means two sets
+# of key bindings and two behaviours to reason about. Where tmux is missing,
+# ccssh installs it (see install.sh).
 
 # ccssh_session_name <remote-dir> [branch]
 #
@@ -20,12 +23,10 @@ ccssh_session_name() {
   printf '\n'
 }
 
-# Prints "tmux", "screen" or "none" for what the remote can offer.
+# Prints "tmux" or "none".
 ccssh_multiplexer() {
   if [ -n "${CCSSH_TMUX:-}" ]; then
     printf 'tmux\n'
-  elif [ -n "${CCSSH_SCREEN:-}" ]; then
-    printf 'screen\n'
   else
     printf 'none\n'
   fi
@@ -51,29 +52,53 @@ ccssh_remote_command() {
       printf '%s new -As %s %s\n' \
         "$(ccssh_shq "$CCSSH_TMUX")" "$(ccssh_shq "$name")" "$(ccssh_shq "$claude_bin")"
       ;;
-    screen)
-      # -D -R detaches the session from anywhere else and reattaches here,
-      # creating it if there is none; -S names it.
-      printf '%s -DRS %s %s\n' \
-        "$(ccssh_shq "$CCSSH_SCREEN")" "$(ccssh_shq "$name")" "$(ccssh_shq "$claude_bin")"
-      ;;
     *)
       printf '%s\n' "$(ccssh_shq "$claude_bin")"
       ;;
   esac
 }
 
+# Prints "mosh" or "ssh".
+#
+# mosh survives a changed IP, a closed lid and a dead network, reattaching by
+# itself — tmux keeps the remote session alive, mosh keeps the client attached
+# to it. It is used only when both ends already have it: a VPS with mosh-server
+# installed is a deliberate choice, and one whose UDP ports are presumably open.
+ccssh_transport() {
+  local host="${1:-}"
+
+  [ "${CCSSH_NO_MOSH:-0}" = "1" ] && { printf 'ssh\n'; return; }
+  [ -n "$host" ] && ! ccssh_host_option "$host" useMosh true && { printf 'ssh\n'; return; }
+
+  if [ -n "${CCSSH_MOSH_SERVER:-}" ] && command -v mosh >/dev/null 2>&1; then
+    printf 'mosh\n'
+  else
+    printf 'ssh\n'
+  fi
+}
+
 # ccssh_run_session <host> <workdir> <session-name>
-# Runs in the foreground and returns ssh's exit status. Staying alive as the
-# parent is what lets a credential relay run alongside the session; see
-# relay.sh. ssh still owns the terminal, so Ctrl-C and resizing behave normally.
+# Runs in the foreground and returns the transport's exit status. Staying alive
+# as the parent is what lets a credential relay run alongside the session; see
+# relay.sh. The transport still owns the terminal, so Ctrl-C and resizing behave
+# normally.
 ccssh_run_session() {
-  local host="$1" dir="$2" name="$3"
+  local host="$1" dir="$2" name="$3" command
+  command="$(ccssh_remote_command "$dir" "$name")"
 
-  case "$(ccssh_multiplexer)" in
-    screen) info "using screen on $host — tmux is not installed there" ;;
-    none)   warn "no tmux or screen on $host — the session ends if the connection drops" ;;
-  esac
+  [ "$(ccssh_multiplexer)" = "none" ] &&
+    warn "no tmux on $host — the session ends if the connection drops"
 
-  ssh -t "$host" "$(ccssh_remote_command "$dir" "$name")"
+  if [ "$(ccssh_transport "$host")" = "mosh" ]; then
+    info "using mosh — the session reattaches by itself after a network drop"
+    # --server takes the absolute path because mosh looks it up over a
+    # non-interactive ssh, whose PATH would not find it.
+    # -- takes a command rather than a shell, so run one explicitly.
+    mosh --server="$CCSSH_MOSH_SERVER" "$host" -- sh -c "$command" && return 0
+
+    warn "mosh could not connect — falling back to ssh"
+    warn "if that persists, open UDP 60000-61000 on $host or set useMosh: false"
+  fi
+
+  ssh -t "$host" "$command"
 }
