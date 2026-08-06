@@ -81,10 +81,14 @@ value_for() {
 
 choose_host() {
   local chosen host dir last label name env_host env_dir env_branch
+  local -a rest=()
 
   last="$(ccssh_memory_last_host)"
 
-  # Named environments first: someone wrote these down on purpose.
+  # Order: what you wrote down, then where you were, then that same host
+  # without a directory, then Local, then everything else. The idea is that
+  # the top of the list is where you almost certainly want to go, and the
+  # second entry is the same machine when you want a different directory.
   while IFS=$'	' read -r name env_host env_dir env_branch; do
     [ -n "$name" ] || continue
     label="◇ $name"
@@ -97,18 +101,19 @@ choose_host() {
     dir="$(ccssh_memory_get "$last" | cut -f1)"
     label="★ $last"
     [ -n "$dir" ] && label="$label   $dir"
-    add_choice "$label" "$last"
+    add_choice "$label" "resume:$last"
+    # The same host, with no directory attached: this is how you go back to
+    # that machine and pick somewhere else.
+    add_choice "◆ $last" "host:$last"
   fi
 
-  while IFS=$'	' read -r host dir; do
+  add_choice "▪ Local" "local"
+
+  while IFS= read -r host; do
     [ -n "$host" ] || continue
     [ "$host" = "$last" ] && continue
-    label="◆ $host"
-    [ -n "$dir" ] && label="$label   $dir"
-    add_choice "$label" "$host"
-  done < <(ccssh_list_hosts | ccssh_memory_annotate)
-
-  add_choice "▪ Local" "local"
+    add_choice "◆ $host" "host:$host"
+  done < <(ccssh_list_hosts)
 
   if [ "${#labels[@]}" -le 1 ]; then
     die "setup" "no SSH hosts found in ~/.ssh/config" \
@@ -408,6 +413,15 @@ main() {
     [ -n "$target" ] || exit 130
   fi
   [ "$target" = "local" ] && run_local
+
+  # Chosen from the menu, a bare host means "that machine, but let me choose
+  # where" — the entry above it is the one carrying the remembered directory.
+  # Typed as an argument it means the opposite: go straight there.
+  case "$target" in
+    resume:*) target="${target#resume:}" ;;
+    host:*)   target="${target#host:}"
+              [ -z "$explicit_path" ] && pick_folder=1 ;;
+  esac
 
   # A name you wrote down wins over a bare host of the same name.
   case "$target" in

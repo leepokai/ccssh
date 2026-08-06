@@ -11,9 +11,10 @@ $ ccssh
   Where do you want to work?
 
   › ★ vps        /srv/app
-    ◆ build-01   /home/me/code/thing
-    ◆ dev-box
+    ◆ vps
     ▪ Local
+    ◆ build-01
+    ◆ dev-box
 
   connecting to vps…
   ✓ claude 2.1.4 on vps
@@ -22,9 +23,13 @@ $ ccssh
   [Claude Code starts on vps, in /srv/app]
 ```
 
-Each host remembers the folder you were last in, so getting back is one
-keystroke — `ccssh vps` skips the menu entirely. Run it from anywhere: ccssh has
-no opinion about your local directory and keeps no mapping to it.
+Where you left off leads the list, and the same host without a directory sits
+right below it — that is how you go back to a machine and pick somewhere else.
+Local comes next, and is first of all on a machine you have not used yet.
+
+`ccssh vps` skips the menu entirely and goes where you left off. Run it from
+anywhere: ccssh has no opinion about your local directory and keeps no mapping
+to it.
 
 Arrow keys or `j`/`k` to move, Enter to choose. With [fzf] installed you also get
 type-to-filter and mouse support.
