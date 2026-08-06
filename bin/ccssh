@@ -361,7 +361,7 @@ resolve_session() {
 # left to do. Connecting does all of this lazily anyway; this is for when you
 # would rather answer the sudo prompt now than halfway into starting work.
 setup_host() {
-  local host="$1" want_mosh
+  local host="$1"
 
   [ -n "$host" ] || die "usage" "--setup needs a host" "e.g. ccssh --setup my-vps"
 
@@ -409,28 +409,24 @@ setup_host() {
       say_warn "no tmux — a dropped connection will end the session"
   fi
 
-  # mosh is worth it only when the round trip is long enough to feel, and it
-  # needs UDP 60000-61000 open, so it is asked for rather than assumed.
+  # mosh shows keystrokes before the host answers and reattaches itself after a
+  # dropped network, so setup puts it in place rather than leaving it to be
+  # discovered. It still falls back to ssh if the UDP ports turn out to be
+  # blocked, so having it costs nothing.
   if [ -n "$CCSSH_MOSH_SERVER" ]; then
-    command -v mosh >/dev/null 2>&1 &&
-      say_ok "mosh — keystrokes echo locally, and a dropped network reattaches itself" ||
-      say_warn "$host has mosh but this machine does not: brew install mosh"
-  elif command -v mosh >/dev/null 2>&1; then
-    log ""
-    info "mosh shows your keystrokes before the host answers, which is worth"
-    info "having on a link with any real latency. It needs UDP 60000-61000"
-    info "reachable — on a VPS that is a firewall change only you can make."
-    want_mosh="$(ccssh_prompt "Install mosh on $host too? [y/N]")" || want_mosh=''
-    case "$want_mosh" in
-      y|Y|yes|Yes)
-        ccssh_install_mosh "$host" &&
-          say_ok "mosh installed" ||
-          say_warn "could not install mosh — ssh will be used"
-        ;;
-      *) say_info "skipped mosh — ssh will be used" ;;
-    esac
+    if command -v mosh >/dev/null 2>&1; then
+      say_ok "mosh — keystrokes echo locally, and a dropped network reattaches itself"
+    else
+      say_warn "$host has mosh but this machine does not — re-run install.sh"
+    fi
+  elif ccssh_host_option "$host" useMosh true; then
+    ccssh_install_mosh "$host" &&
+      say_ok "mosh installed — keystrokes will echo locally" ||
+      say_warn "no mosh on $host — ssh will be used, which is fine, just less smooth"
+    command -v mosh >/dev/null 2>&1 ||
+      say_warn "this machine has no mosh either — re-run install.sh to get it"
   else
-    say_info "no mosh here; 'brew install mosh' on both ends makes typing feel local"
+    say_info "mosh disabled for $host by useMosh"
   fi
 
   ccssh_forward_credential "$host" ||

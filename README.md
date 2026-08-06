@@ -100,7 +100,9 @@ ccssh/install.sh
 Run from a clone, the installer links to *that* clone and leaves it in charge —
 so `git pull` is how you update, and your edits take effect immediately.
 
-Requires `bash`, `ssh` and `python3` locally; `python3` and `git` on the remote.
+Requires `bash`, `ssh` and `python3` locally; `python3` and `git` on the
+remote. The installer also puts `mosh` on this machine — see
+[Setting a host up](#setting-a-host-up) — which `CCSSH_SKIP_MOSH=1` skips.
 
 Connections are much faster with multiplexing — add this to `~/.ssh/config`:
 
@@ -158,11 +160,14 @@ password and you would rather answer it now than halfway into starting work.
 Package installs go through brew where it exists, and apt / dnf / yum / pacman
 / apk / zypper otherwise — those need root, so it asks first.
 
-Only mosh is opt-in, because it needs UDP 60000-61000 reachable and on a VPS
-that is a firewall change only you can make. It earns its place on a link with
-real latency: it shows your keystrokes before the host answers, so typing feels
-local, and it reattaches by itself when the network drops. On a host a
-millisecond away it changes nothing worth having.
+mosh is part of that, and `install.sh` puts it on this machine too. It shows
+your keystrokes before the host answers, so typing over a slow link feels
+local, and it reattaches by itself when the network drops or your laptop wakes
+somewhere else. If its UDP ports turn out to be blocked, ccssh falls back to
+ssh and says so — having it costs nothing.
+
+`CCSSH_SKIP_MOSH=1` on the installer skips it; `"useMosh": false` per host
+skips it there.
 
 ## Environments
 

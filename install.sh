@@ -97,6 +97,41 @@ fi
 ln -sf "$launcher" "$link"
 note "Installed: $link -> $launcher"
 
+# --- mosh ------------------------------------------------------------------
+
+# mosh shows your keystrokes before the host answers and reattaches itself
+# after a dropped network, so ccssh uses it whenever both ends have it. Getting
+# it here is half of that, and the half that costs nothing to arrange.
+# CCSSH_SKIP_MOSH=1 opts out.
+install_mosh_locally() {
+  [ "${CCSSH_SKIP_MOSH:-0}" = "1" ] && return 0
+  command -v mosh >/dev/null 2>&1 && return 0
+
+  local manager=''
+  for candidate in brew apt-get dnf pacman apk zypper; do
+    command -v "$candidate" >/dev/null 2>&1 && { manager="$candidate"; break; }
+  done
+  [ -n "$manager" ] || { note "No package manager here to install mosh with"; return 0; }
+
+  note "Installing mosh"
+  case "$manager" in
+    brew)    brew install mosh >/dev/null 2>&1 ;;
+    apt-get) sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y mosh >/dev/null 2>&1 ;;
+    dnf)     sudo dnf install -y mosh >/dev/null 2>&1 ;;
+    pacman)  sudo pacman -S --noconfirm mosh >/dev/null 2>&1 ;;
+    apk)     sudo apk add mosh >/dev/null 2>&1 ;;
+    zypper)  sudo zypper install -y mosh >/dev/null 2>&1 ;;
+  esac
+
+  if command -v mosh >/dev/null 2>&1; then
+    note "  mosh installed — typing on a distant host will feel local"
+  else
+    note "  could not install mosh; ccssh will use ssh (install it later to switch)"
+  fi
+}
+
+install_mosh_locally
+
 # --- what to do next --------------------------------------------------------
 
 missing=''
