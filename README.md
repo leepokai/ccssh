@@ -41,14 +41,12 @@ type-to-filter and mouse support.
 
 ```sh
 git clone https://github.com/leepokai/ccssh
-ln -s "$PWD/ccssh/bin/ccssh" /usr/local/bin/ccssh
+ccssh/install.sh
 ```
 
-As a Claude Code plugin, for the `/ssh` command:
-
-```
-/plugin marketplace add leepokai/ccssh
-```
+That symlinks `bin/ccssh` into the first writable directory on your PATH —
+`~/.local/bin`, where Claude Code installs itself, or `/usr/local/bin`. Keep the
+clone where it is: the link points at it, so updating is `git pull`.
 
 Requires `bash`, `ssh` and `python3` locally; `python3` and `git` on the remote.
 
@@ -73,9 +71,9 @@ ccssh --local      run Claude Code here
 ccssh --forget     forget what this project remembers
 ```
 
-Inside a session, `/ssh` lists hosts, tests one, re-sends credentials, and
-manages worktrees. It cannot move the session to another host — a slash command
-cannot take over the terminal. Leave and run `ccssh <host>` instead.
+`ccssh` runs *before* Claude Code and hands the terminal over to it, so there is
+nothing to switch from inside a session. To move to another host, leave and run
+`ccssh <host>` again.
 
 ## Credentials
 
@@ -164,7 +162,8 @@ The hash comes from the repository path, so two repositories with the same name
 never collide. Branch names are validated and the composed path is checked to
 stay inside that root, so a branch name cannot write anywhere else.
 
-Remove one with `/ssh worktree rm <branch>`, or `git worktree remove` on the host.
+Remove one with `git worktree remove` on the host. They are full checkouts, so
+they do accumulate.
 
 ## MCP servers
 

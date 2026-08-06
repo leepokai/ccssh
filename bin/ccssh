@@ -2,7 +2,19 @@
 # ccssh — choose a host, folder and branch, then run Claude Code there.
 set -uo pipefail
 
-CCSSH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Installing puts a symlink on PATH, and BASH_SOURCE then reports the link's
+# own path — so resolve it before looking for the scripts next door.
+_ccssh_source="${BASH_SOURCE[0]}"
+while [ -L "$_ccssh_source" ]; do
+  _ccssh_dir="$(cd -P "$(dirname "$_ccssh_source")" && pwd)"
+  _ccssh_source="$(readlink "$_ccssh_source")"
+  case "$_ccssh_source" in
+    /*) ;;
+    *) _ccssh_source="$_ccssh_dir/$_ccssh_source" ;;
+  esac
+done
+CCSSH_ROOT="$(cd -P "$(dirname "$_ccssh_source")/.." && pwd)"
+unset _ccssh_source _ccssh_dir
 for _module in lib hosts picker probe auth install folders worktree memory relay session; do
   # shellcheck source=/dev/null
   . "$CCSSH_ROOT/scripts/$_module.sh"
