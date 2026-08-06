@@ -46,6 +46,14 @@ else
   printf '  ok   no literal fractional read timeouts\n'
 fi
 
+printf '\ncalls resolve\n'
+if missing="$(python3 lint_calls.py ../bin/ccssh ../scripts/*.sh)"; then
+  printf '  ok   every ccssh_* call has a definition\n'
+else
+  printf '%s\n' "$missing" | sed 's/^/  FAIL undefined: /'
+  failed=1
+fi
+
 if [ "$failed" -eq 0 ]; then
   printf '\nall suites passed\n'
 else

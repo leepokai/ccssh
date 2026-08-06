@@ -106,11 +106,37 @@ _ccssh_children() {
   local host="$1" dir="$2" file
   file="$_ccssh_path_cache/$(printf '%s' "$dir" | ccssh_sha256 | cut -c1-16)"
   if [ ! -f "$file" ]; then
+    # -A includes dotfiles, without which ~/.config is simply unreachable.
+    # -L resolves symlinks, without which a symlinked directory has no
+    # trailing slash and the filter below drops it silently. bash-completion
+    # uses -aF1dL and zsh -d1FL for exactly these two reasons.
+    #
     # -n keeps ssh from swallowing the keystrokes still queued on stdin.
-    ssh -n "$host" "ls -1p $(ccssh_shq "$dir") 2>/dev/null" 2>/dev/null |
+    # Multiplexing is passed explicitly rather than assumed: without a master
+    # connection every directory you walk into costs a full handshake, and
+    # most people have not configured one. BatchMode keeps a stalled auth
+    # prompt from freezing the picker — bash-completion and zsh both do the
+    # same and simply return nothing.
+    ssh -n \
+      -o ControlMaster=auto \
+      -o ControlPath="$HOME/.ssh/sockets/%C" \
+      -o ControlPersist=10m \
+      -o BatchMode=yes \
+      -o ConnectTimeout=5 \
+      "$host" "ls -1pAL $(ccssh_shq "$dir") 2>/dev/null" 2>/dev/null |
       grep '/$' | sed 's|/$||' > "$file" || true
   fi
   cat "$file" 2>/dev/null
+}
+
+# The longest prefix every candidate shares.
+_ccssh_common_prefix() {
+  python3 -c '
+import os, sys
+
+lines = [line.rstrip("\n") for line in sys.stdin if line.strip()]
+print(os.path.commonprefix(lines) if lines else "")
+'
 }
 
 # ccssh_pick_folder <host> <home> [suggestion]...

@@ -229,6 +229,27 @@ if [ -n "$first_dir" ]; then
   # would match nothing, invisibly.
   check "control bytes never reach the buffer" \
     "RESULT=[$first_repo]" "$(type_folder "\n")"
+
+  # The tests only ever read the RESULT line, so a helper printing "command
+  # not found" into the middle of the display went out unnoticed. Assert the
+  # display itself is clean.
+  noise="$( ( printf 'a\n' | script -q /dev/null /bin/bash "$driver" 2>&1 ) |
+    tr -d '\r' | grep -iE 'command not found|no such file|unbound variable|syntax error' |
+    head -1 )"
+  check "the picker prints no errors of its own" "" "$noise"
+
+  # ls without -A hides dotfiles and without -L leaves a symlinked directory
+  # with no trailing slash, so both were being dropped in silence.
+  scratch="/tmp/ccssh-e2e-$$"
+  ssh -n "$HOST" "mkdir -p $scratch/realdir $scratch/.hidden && ln -s realdir $scratch/linkdir && touch $scratch/afile" 2>/dev/null
+  listing="$( ( . scripts/picker.sh
+    _ccssh_path_cache="$(mktemp -d)"
+    _ccssh_children "$HOST" "$scratch/"
+    rm -rf "$_ccssh_path_cache" ) | sort | tr '\n' ' ' )"
+  ssh -n "$HOST" "rm -rf $scratch" 2>/dev/null
+
+  check "hidden and symlinked directories are both listed" \
+    ".hidden linkdir realdir " "$listing"
 fi
 
 # --- forgetting -------------------------------------------------------------
