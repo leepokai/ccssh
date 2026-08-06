@@ -22,6 +22,9 @@ done
 
 CCSSH_VERSION_STRING="0.1.0"
 CCSSH_DRY_RUN="${CCSSH_DRY_RUN:-0}"
+CCSSH_NEW_SESSION="${CCSSH_NEW_SESSION:-0}"
+CCSSH_TAKEOVER="${CCSSH_TAKEOVER:-0}"
+CCSSH_VERBOSE="${CCSSH_VERBOSE:-0}"
 
 usage() {
   cat <<'EOF'
@@ -32,9 +35,12 @@ ccssh — get to Claude Code on another machine, fast
   ccssh <host>:<path>    go straight to a folder
   ccssh -p               pick the folder again
   ccssh -b               pick a branch or worktree too
+  ccssh --new            a separate session, alongside any already open
+  ccssh --takeover       detach whoever else is attached
   ccssh --local          run Claude Code here
   ccssh --forget [host]  forget where you left off
   ccssh --dry-run        walk through it, change nothing
+  ccssh -v               show every step instead of one status line
   ccssh --version        print the version
 
 Each host remembers the folder you were last in, so getting back is one
@@ -174,10 +180,10 @@ choose_branch() {
 # --- connecting -------------------------------------------------------------
 
 prepare_remote() {
-  local host="$1"
+  local host="$1" candidate_dir="${2:-}" candidate_session="${3:-}"
 
-  info "connecting to ${host}…"
-  ccssh_probe "$host" ||
+  status "connecting to ${host}…"
+  ccssh_probe "$host" "$candidate_dir" "$candidate_session" ||
     die "connect" "cannot reach $host" "check it manually with: ssh $host"
 
   ccssh_platform_supported ||
@@ -188,21 +194,22 @@ prepare_remote() {
     die "probe" "python3 is not installed on $host" \
       "it is needed to install the credential safely"
 
-  [ -n "$CCSSH_GIT" ] || warn "git not found on $host — branch selection is unavailable"
+  [ -n "$CCSSH_GIT" ] || say_warn "git not found on $host — branch selection is unavailable"
 
   if [ -z "$CCSSH_CLAUDE" ]; then
     if [ "$CCSSH_DRY_RUN" = "1" ]; then
       info "would install Claude Code on $host"
     else
-      warn "Claude Code is not installed on $host — installing it now"
+      say_warn "Claude Code is not installed on $host — installing it now"
       ccssh_install_claude "$host" ||
         die "install" "the installer did not leave a working claude on $host" \
           "install it manually there, then run ccssh again"
       ccssh_probe "$host" || die "probe" "lost contact with $host after installing"
-      ok "claude ${CCSSH_VERSION:-ready} on $host"
+      say_ok "claude ${CCSSH_VERSION:-ready} on $host"
     fi
   else
-    ok "claude ${CCSSH_VERSION:-ready} on $host"
+    status "$host · claude ${CCSSH_VERSION:-ready}"
+    ccssh_report_version_drift "$host"
   fi
 
   # Persistence is worth a package install: without tmux, a dropped connection
@@ -212,8 +219,8 @@ prepare_remote() {
       info "would install tmux on $host"
     else
       ccssh_install_tmux "$host" &&
-        ok "tmux installed on $host" ||
-        warn "continuing without tmux — the session ends if the connection drops"
+        say_ok "tmux installed on $host" ||
+        say_warn "continuing without tmux — the session ends if the connection drops"
     fi
   fi
 
@@ -228,14 +235,15 @@ prepare_remote() {
     return 0
   fi
 
+  status "$host · sending credentials"
   ccssh_forward_credential "$host" ||
-    warn "run 'claude' once on $host to log in"
+    say_warn "run 'claude' once on $host to log in"
 
   # mosh is never installed unasked: it needs UDP 60000-61000 open, which on a
   # VPS is a firewall change only the owner can make.
   if [ -z "${CCSSH_MOSH_SERVER:-}" ] && command -v mosh >/dev/null 2>&1 &&
      ccssh_host_option "$host" useMosh true; then
-    info "tip: install mosh on $host and the session will reattach by itself"
+    say_info "tip: install mosh on $host and the session will reattach by itself"
   fi
 }
 
@@ -245,6 +253,11 @@ run_remote() {
 
   [ -n "$worktree" ] && workdir="$worktree"
   session="$(ccssh_session_name "$dir" "$branch")"
+
+  # --new picks the first unused suffix, so it lands beside anything already
+  # running here rather than joining it.
+  [ "$CCSSH_NEW_SESSION" = "1" ] &&
+    session="$(ccssh_session_free_name "$host" "$session")"
 
   # Catch a bad path here, where we can say which one and why, rather than
   # letting the remote shell fail with a bare "no such file or directory".
@@ -313,6 +326,9 @@ main() {
       --dry-run)    CCSSH_DRY_RUN=1 ;;
       -p|--pick)    pick_folder=1 ;;
       -b|--branch)  pick_branch=1 ;;
+      --new)        CCSSH_NEW_SESSION=1 ;;
+      -v|--verbose) CCSSH_VERBOSE=1 ;;
+      --takeover)   CCSSH_TAKEOVER=1 ;;
       --forget)     shift; forget_host "${1:-}"; exit 0 ;;
       -*)           usage; die "usage" "unknown option: $1" ;;
       *)            target="$1" ;;
@@ -336,13 +352,21 @@ main() {
   [ -n "$host" ] || exit 130
   [ "$host" = "local" ] && run_local
 
-  prepare_remote "$host"
-
+  # Memory is local and instant, so read it first: the probe can then confirm
+  # the folder and look for an open session in the same round trip.
   remembered="$(ccssh_memory_get "$host")"
   IFS=$'\t' read -r dir branch worktree <<<"${remembered:-$'\t\t'}"
 
-  # The remote home is only known once the probe has run, and a quoted ~ would
-  # reach the remote shell as a literal.
+  candidate="${worktree:-$dir}"
+  case "$candidate" in
+    '~'*) candidate='' ;;  # needs the remote home, which the probe has yet to report
+  esac
+
+  prepare_remote "$host" "$candidate" \
+    "$([ -n "$candidate" ] && ccssh_session_name "${dir:-$candidate}" "$branch")"
+
+  # A quoted ~ would reach the remote shell as a literal, and the home it
+  # refers to is only known now.
   dir="$(ccssh_expand_home "$dir" "$CCSSH_HOME")"
   worktree="$(ccssh_expand_home "$worktree" "$CCSSH_HOME")"
 
@@ -354,8 +378,9 @@ main() {
   elif [ "$pick_folder" = "1" ] || [ -z "$dir" ]; then
     dir="$(choose_folder "$host")" || exit 130
     branch=''; worktree=''
-  elif ! ccssh_dir_exists "$host" "$dir"; then
-    warn "$dir is gone on $host — choose another"
+  elif [ "${CCSSH_DIR_EXISTS:-}" = "no" ] || \
+       { [ -z "${CCSSH_DIR_EXISTS:-}" ] && ! ccssh_dir_exists "$host" "$dir"; }; then
+    say_warn "$dir is gone on $host — choose another"
     dir="$(choose_folder "$host")" || exit 130
     branch=''; worktree=''
   fi

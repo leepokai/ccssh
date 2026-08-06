@@ -75,9 +75,16 @@ ccssh vps              go straight there
 ccssh vps:/srv/other   go straight to a folder
 ccssh -p               pick the folder again
 ccssh -b               pick a branch or worktree too
+ccssh --new            a separate session, alongside any already open
+ccssh --takeover       detach whoever else is attached
 ccssh --local          run Claude Code here
 ccssh --forget [host]  forget where you left off
+ccssh -v               show every step instead of one status line
 ```
+
+Connecting prints a single line that rewrites itself and then gets out of the
+way. Anything that needs you — an install, a missing credential, an expiry
+running low — prints properly and stays. `-v` shows every step.
 
 `ccssh` runs *before* Claude Code and hands the terminal over to it, so there is
 nothing to switch from inside a session. To move to another host, leave and run
@@ -234,9 +241,20 @@ only you can make. If mosh cannot connect, ccssh falls back to ssh and says so.
 
 Opt out per host with `"useMosh": false`, or everywhere with `CCSSH_NO_MOSH=1`.
 
+## More than one session
+
 Sessions are named after the directory and branch, with the directory's path
-hashed in so two repositories sharing a name never attach to each other's. That
-also means you can reach one without ccssh at all: `ssh host` then `tmux attach`.
+hashed in — so two repositories sharing a name never attach to each other's, and
+different folders or branches on one host are always separate.
+
+Running `ccssh` twice on the *same* folder joins the session already open rather
+than starting a second one. That is often what you want, from a phone or beside
+someone else, so it is the default — but ccssh says when it happens instead of
+letting you wonder why your terminal is echoing someone else. `--new` gives you
+a genuinely separate session; `--takeover` detaches the other terminal so the
+window is not squeezed down to the smaller of the two.
+
+You can reach any of them without ccssh at all: `ssh host` then `tmux attach`.
 
 [mosh]: https://mosh.org
 

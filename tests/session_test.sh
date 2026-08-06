@@ -40,7 +40,16 @@ cmd="$(ccssh_remote_command "/home/me/proj" "ccssh-proj")"
 contains "carries the login PATH into the session" "$cmd" "export PATH='/opt/homebrew/bin:/usr/bin:/bin'"
 contains "runs claude by absolute path" "$cmd" "'/Users/someone/.local/bin/claude'"
 contains "runs tmux by absolute path" "$cmd" "'/opt/homebrew/bin/tmux'"
-contains "attaches or creates one named session" "$cmd" "new -As 'ccssh-proj'"
+contains "attaches or creates one named session" "$cmd" "new -A -s 'ccssh-proj'"
+
+# --takeover detaches whoever else is attached, so the window is not squeezed
+# down to the smallest terminal watching it.
+takeover="$(CCSSH_TAKEOVER=1 ccssh_remote_command "/home/me/proj" "ccssh-proj")"
+contains "takeover detaches the other client" "$takeover" "new -AD -s 'ccssh-proj'"
+case "$cmd" in
+  *"-AD"*) check "no takeover by default" "absent" "PRESENT" ;;
+  *)       check "no takeover by default" "absent" "absent" ;;
+esac
 contains "changes to the working directory" "$cmd" "cd '/home/me/proj'"
 contains "replaces the shell rather than nesting one" "$cmd" "exec "
 

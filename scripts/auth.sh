@@ -229,32 +229,32 @@ ccssh_forward_credential() {
   CCSSH_FORWARDED_EXPIRY=''
 
   if ! ccssh_forward_enabled "$host"; then
-    info "credential forwarding disabled for $host"
+    status "$host · using its own credentials"
     return 1
   fi
 
   if ! raw="$(ccssh_read_credential)"; then
-    warn "no local credential found"
+    say_warn "no local credential found"
     return 1
   fi
 
   # Pushing an already-dead token would look like success and fail later on
   # the remote, so say what is actually wrong.
   if printf '%s' "$raw" | ccssh_credential_expired; then
-    warn "the local access token has already expired"
-    warn "run any Claude Code command here to renew it, then reconnect"
+    say_warn "the local access token has already expired"
+    say_warn "run any Claude Code command here to renew it, then reconnect"
     return 1
   fi
 
   ccssh_renewal_enabled "$host" && keep_refresh=1
 
   if ! payload="$(printf '%s' "$raw" | ccssh_strip_credential "$keep_refresh")"; then
-    warn "local credential is not in a recognised format"
+    say_warn "local credential is not in a recognised format"
     return 1
   fi
 
   if ! printf '%s' "$payload" | ccssh_push_credential "$host"; then
-    warn "could not write the credential on $host"
+    say_warn "could not write the credential on $host"
     return 1
   fi
 
@@ -262,20 +262,20 @@ ccssh_forward_credential() {
   CCSSH_FORWARDED_EXPIRY="$(printf '%s' "$raw" | ccssh_credential_expires_at)"
 
   if [ "$keep_refresh" = "1" ]; then
-    ok "credentials forwarded — $host can renew them itself"
-    warn "both machines now share one rotating token; either may be logged out"
+    say_ok "credentials forwarded — $host can renew them itself"
+    say_warn "both machines now share one rotating token; either may be logged out"
     return 0
   fi
 
   hours="$(printf '%s' "$raw" | ccssh_credential_hours_left)"
   if [ -n "$hours" ]; then
-    ok "credentials forwarded (valid for ${hours}h)"
+    status "$host · credentials valid ${hours}h"
     # Without the refresh token the remote cannot renew on its own.
     if [ "${hours%.*}" -lt 2 ] 2>/dev/null; then
-      warn "reconnect with ccssh when that runs out, or enable allowRenewal for $host"
+      say_warn "reconnect with ccssh when that runs out, or enable allowRenewal for $host"
     fi
   else
-    ok "credentials forwarded"
+    status "$host · credentials sent"
   fi
   return 0
 }

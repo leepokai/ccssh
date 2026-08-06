@@ -15,6 +15,27 @@ info() { printf '  %s%s%s\n' "$_c_dim" "$*" "$_c_reset" >&2; }
 ok()   { printf '  %s✓%s %s\n' "$_c_green" "$_c_reset" "$*" >&2; }
 warn() { printf '  %s!%s %s\n' "$_c_yellow" "$_c_reset" "$*" >&2; }
 
+# A single line that rewrites itself while connecting, then gets out of the way.
+# Getting to work is the point; a transcript of every round trip is not. Notable
+# things — an install, a missing credential, an expiry running out — still print
+# properly and stay on screen.
+status() {
+  [ "${CCSSH_VERBOSE:-0}" = "1" ] && { info "$*"; return; }
+  [ -t 2 ] || return 0
+  printf '\r\033[2K  %s%s%s' "$_c_dim" "$*" "$_c_reset" >&2
+}
+
+status_clear() {
+  [ "${CCSSH_VERBOSE:-0}" = "1" ] && return 0
+  [ -t 2 ] || return 0
+  printf '\r\033[2K' >&2
+}
+
+# Anything permanent has to clear the transient line first, or it lands on top.
+say_ok()   { status_clear; ok "$@"; }
+say_warn() { status_clear; warn "$@"; }
+say_info() { status_clear; info "$@"; }
+
 # die <stage> <message> [hint]
 # Every failure names the stage it happened in so the user knows what to retry.
 die() {
