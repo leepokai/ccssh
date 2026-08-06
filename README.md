@@ -45,13 +45,22 @@ type-to-filter and mouse support.
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/leepokai/ccssh/main/install.sh | bash
+```
+
+That fetches ccssh into `~/.local/share/ccssh` and links it into the first
+writable directory on your PATH — `~/.local/bin`, where Claude Code installs
+itself, or `/usr/local/bin`. Re-run the same line to update.
+
+If you would rather see the source first, or want to hack on it:
+
+```sh
 git clone https://github.com/leepokai/ccssh
 ccssh/install.sh
 ```
 
-That symlinks `bin/ccssh` into the first writable directory on your PATH —
-`~/.local/bin`, where Claude Code installs itself, or `/usr/local/bin`. Keep the
-clone where it is: the link points at it, so updating is `git pull`.
+Run from a clone, the installer links to *that* clone and leaves it in charge —
+so `git pull` is how you update, and your edits take effect immediately.
 
 Requires `bash`, `ssh` and `python3` locally; `python3` and `git` on the remote.
 
