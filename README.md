@@ -34,17 +34,20 @@ to it.
 Arrow keys or `j`/`k` to move, Enter to choose. With [fzf] installed you also get
 type-to-filter and mouse support.
 
-Typing a path is answered by the host as you go: what you have typed filters the
-directories that are really there, Tab completes, and the arrows walk the
-suggestions and put their choice on the line — so the line is never a lie about
-where you are heading.
+Choosing a directory is one input, not a list and then a prompt. The
+repositories it found are there to begin with; typing narrows them straight
+away, with no keystroke needed first:
 
 ```
-  Path on vps: /home/me/pro
+  Folder on vps: api
 
-      > projects/
-        prototypes/
+      > /srv/api
+        /home/me/apiary
 ```
+
+A line starting with `/` or `~` completes against the host instead, so
+somewhere that was never on the list takes no extra step. Tab puts the
+highlighted entry on the line — that is how you walk down into it.
 
 [fzf]: https://github.com/junegunn/fzf
 

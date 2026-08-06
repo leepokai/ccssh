@@ -126,29 +126,22 @@ choose_host() {
 }
 
 choose_folder() {
-  local host="$1" chosen typed
+  local host="$1" chosen
   local -a options=()
 
   while IFS= read -r line; do
     [ -n "$line" ] && options+=("$line")
   done < <(ccssh_list_repos "$host")
 
-  options+=("… type a path")
-
-  chosen="$(ccssh_pick "Folder on $host?" "${options[@]}")" || exit 130
+  status_clear
+  chosen="$(ccssh_pick_folder "$host" "$CCSSH_HOME" "${options[@]}")" || exit 130
   [ -n "$chosen" ] || exit 130
 
-  if [ "$chosen" = "… type a path" ]; then
-    typed="$(ccssh_prompt_path "$host" "$CCSSH_HOME/")" || exit 130
-    [ -n "$typed" ] || die "folder" "no path given"
-    typed="$(ccssh_expand_home "$typed" "$CCSSH_HOME")"
-    ccssh_dir_exists "$host" "$typed" ||
-      die "folder" "$typed does not exist on $host"
-    printf '%s\n' "$typed"
-    return 0
-  fi
-
-  printf '%s\n' "$chosen"
+  chosen="$(ccssh_expand_home "$chosen" "$CCSSH_HOME")"
+  ccssh_dir_exists "$host" "$chosen" ||
+    die "folder" "$chosen does not exist on $host"
+  printf '%s
+' "$chosen"
 }
 
 # choose_branch <host> <repo> — prints "branch<TAB>path", empty for the repo itself.

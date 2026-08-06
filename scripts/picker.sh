@@ -98,7 +98,7 @@ ccssh_prompt() {
   printf '%s\n' "$answer"
 }
 
-# --- typing a remote path ---------------------------------------------------
+# --- choosing a directory ---------------------------------------------------
 
 # Directories under <dir> on <host>, cached: walking back up a path you have
 # already visited should not cost another round trip.
@@ -113,48 +113,58 @@ _ccssh_children() {
   cat "$file" 2>/dev/null
 }
 
-# The longest prefix every candidate shares, for Tab.
-_ccssh_common_prefix() {
-  python3 -c '
-import os, sys
-
-lines = [line.rstrip("\n") for line in sys.stdin if line.strip()]
-print(os.path.commonprefix(lines) if lines else "")
-'
-}
-
-# ccssh_prompt_path <host> [starting-path]
+# ccssh_pick_folder <host> <home> [suggestion]...
 #
-# A path you type, with the remote answering: what you have typed filters the
-# directories that actually exist there, Tab completes, and the arrows walk the
-# list. The arrows write their choice into the line, so what you see on the
-# line is always what you will get.
-ccssh_prompt_path() {
-  local host="$1" buffer="${2:-/}"
-  local prompt="Path on $host: "
-  local ch rest dir base line i selected=-1
-  local -a matches=()
+# One input rather than a list and then a prompt. The suggestions are there to
+# begin with, typing narrows them, and a line starting with / or ~ switches to
+# completing against the host itself — so reaching somewhere that was never on
+# the list costs no extra step. Tab takes the highlighted entry onto the line,
+# which is how you descend.
+ccssh_pick_folder() {
+  local host="$1" home="$2"; shift 2
+  local prompt="Folder on $host: "
+  local buffer='' ch rest dir base line i selected=0
+  local -a suggestions=("$@") matches=()
 
   if ! { exec 3</dev/tty 4>/dev/tty; } 2>/dev/null; then
-    ccssh_prompt "Path on $host:"
-    return
+    printf 'ccssh needs a terminal to choose a folder.\n' >&2
+    printf 'Name the directory directly instead, e.g. ccssh %s:/path\n' "$host" >&2
+    return 1
   fi
 
   _ccssh_path_cache="$(mktemp -d)"
 
+  _finish() {
+    printf '\033[J\n' >&4
+    exec 3<&- 4>&-
+    rm -rf "$_ccssh_path_cache"
+  }
+
+  # A line that looks like a path is completed against the host; anything else
+  # just narrows what was offered.
   _refilter() {
-    dir="${buffer%/*}/"
-    base="${buffer##*/}"
     matches=()
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      case "$line" in
-        "$base"*) matches+=("$line") ;;
-      esac
-    done < <(_ccssh_children "$host" "$dir")
-    # Nothing chosen yet: what you typed stands until you move onto a
-    # suggestion, so the first press of Down takes the first one.
-    selected=-1
+    case "$buffer" in
+      '~'*|/*)
+        dir="${buffer%/*}/"
+        case "$buffer" in '~'*) dir="${home}/${dir#\~/}" ;; esac
+        base="${buffer##*/}"
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in
+            "$base"*) matches+=("${dir}${line}") ;;
+          esac
+        done < <(_ccssh_children "$host" "$dir")
+        ;;
+      *)
+        for line in "${suggestions[@]}"; do
+          case "$line" in
+            *"$buffer"*) matches+=("$line") ;;
+          esac
+        done
+        ;;
+    esac
+    selected=0
   }
 
   _draw() {
@@ -163,19 +173,16 @@ ccssh_prompt_path() {
     for i in "${!matches[@]}"; do
       [ "$i" -ge 8 ] && break
       if [ "$i" -eq "$selected" ]; then
-        printf '\n\033[2K      \033[36m>\033[0m \033[1m%s/\033[0m' "${matches[$i]}" >&4
+        printf '\n\033[2K      \033[36m>\033[0m \033[1m%s\033[0m' "${matches[$i]}" >&4
       else
-        printf '\n\033[2K        \033[2m%s/\033[0m' "${matches[$i]}" >&4
+        printf '\n\033[2K        \033[2m%s\033[0m' "${matches[$i]}" >&4
       fi
     done
     [ "${#matches[@]}" -gt 8 ] &&
       printf '\n\033[2K        \033[2m... %d more\033[0m' "$((${#matches[@]} - 8))" >&4
+    [ "${#matches[@]}" -eq 0 ] &&
+      printf '\n\033[2K        \033[2m(nothing matching — Enter takes what you typed)\033[0m' >&4
     printf '\033[u' >&4
-  }
-
-  _take_selected() {
-    [ "${#matches[@]}" -gt 0 ] || return 1
-    buffer="${dir}${matches[$selected]}"
   }
 
   printf '\n' >&4
@@ -185,6 +192,9 @@ ccssh_prompt_path() {
   while IFS= read -rsn1 -u 3 ch; do
     case "$ch" in
       '')
+        if [ "${#matches[@]}" -gt 0 ]; then
+          buffer="${matches[$selected]}"
+        fi
         break
         ;;
       $'\177'|$'\b')
@@ -192,39 +202,29 @@ ccssh_prompt_path() {
         _refilter
         ;;
       $'\t')
-        if [ "${#matches[@]}" -eq 1 ]; then
-          buffer="${dir}${matches[0]}/"
-        elif [ "${#matches[@]}" -gt 1 ]; then
-          line="$(printf '%s\n' "${matches[@]}" | _ccssh_common_prefix)"
-          [ -n "$line" ] && buffer="${dir}${line}"
+        # Take the highlighted entry onto the line; a directory gains a
+        # trailing slash so the next keystroke is already inside it.
+        if [ "${#matches[@]}" -gt 0 ]; then
+          buffer="${matches[$selected]}/"
+          _refilter
         fi
-        _refilter
+        ;;
+      $'\003')
+        _finish; return 1
         ;;
       $'\033')
         IFS= read -rsn2 -t "$CCSSH_ESCAPE_TIMEOUT" -u 3 rest || rest=''
         case "$rest" in
-          '[A') if [ "${#matches[@]}" -gt 0 ]; then
-                  if [ "$selected" -le 0 ]; then
-                    selected=$(( ${#matches[@]} - 1 ))
-                  else
-                    selected=$(( selected - 1 ))
-                  fi
-                  _take_selected
-                fi ;;
+          '[A') [ "${#matches[@]}" -gt 0 ] &&
+                  selected=$(( (selected - 1 + ${#matches[@]}) % ${#matches[@]} )) ;;
           '[B') [ "${#matches[@]}" -gt 0 ] &&
-                  selected=$(( (selected + 1) % ${#matches[@]} )) &&
-                  _take_selected ;;
-          '')   printf '\033[J\n' >&4; exec 3<&- 4>&-
-                rm -rf "$_ccssh_path_cache"; return 1 ;;
+                  selected=$(( (selected + 1) % ${#matches[@]} )) ;;
+          '')   _finish; return 1 ;;
         esac
         ;;
-      $'\003')
-        printf '\033[J\n' >&4; exec 3<&- 4>&-
-        rm -rf "$_ccssh_path_cache"; return 1
-        ;;
       *)
-        # Only what can be typed: a stray Ctrl-D or other control byte landing
-        # in the buffer would make it match nothing, invisibly.
+        # Only what can be typed: a stray control byte in the buffer would
+        # match nothing, invisibly.
         case "$ch" in
           [[:print:]]) buffer="$buffer$ch"; _refilter ;;
           *) continue ;;
@@ -234,8 +234,9 @@ ccssh_prompt_path() {
     _draw
   done
 
-  printf '\033[J\n' >&4
-  exec 3<&- 4>&-
-  rm -rf "$_ccssh_path_cache"
-  printf '%s\n' "$buffer"
+  _finish
+  case "$buffer" in
+    '~'*) printf '%s\n' "${home}/${buffer#\~/}" ;;
+    *)    printf '%s\n' "$buffer" ;;
+  esac
 }

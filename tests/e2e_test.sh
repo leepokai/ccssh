@@ -67,6 +67,8 @@ absent() {
 # the suite forever rather than failing it.
 CCSSH_E2E_TIMEOUT="${CCSSH_E2E_TIMEOUT:-45}"
 HOME_ON_HOST="$(ssh -n "$HOST" 'printf %s "$HOME"' 2>/dev/null)"
+# shellcheck source=../scripts/folders.sh
+. scripts/lib.sh; . scripts/folders.sh
 
 run() {
   local keys="$1"; shift
@@ -166,21 +168,24 @@ saw "-c runs" "$out" "connecting to $HOST"
 out="$(run '\n' "$HOST" -r)"
 saw "-r handles having nothing to resume" "$out" "connecting to $HOST"
 
-# --- typing a path ----------------------------------------------------------
+# --- choosing a directory ---------------------------------------------------
 
-# Driving the path input directly: reaching it through the menu would make the
-# test about the menu instead.
-driver="$CCSSH_STATE_DIR/path-driver.sh"
+# Driving the input directly: reaching it through the menu would make the test
+# about the menu instead.
+driver="$CCSSH_STATE_DIR/folder-driver.sh"
 cat > "$driver" <<DRIVER
 cd "$PWD"
 . scripts/lib.sh
 . scripts/worktree.sh
+. scripts/folders.sh
 . scripts/picker.sh
-printf 'RESULT=[%s]\\n' "\$(ccssh_prompt_path "$HOST" "$HOME_ON_HOST/")"
+opts=()
+while IFS= read -r l; do [ -n "\$l" ] && opts+=("\$l"); done < <(ccssh_list_repos "$HOST")
+printf 'RESULT=[%s]\\n' "\$(ccssh_pick_folder "$HOST" "$HOME_ON_HOST" "\${opts[@]}")"
 DRIVER
 
-type_path() {
-  local keys="$1" out="$CCSSH_STATE_DIR/path.$$" pid waited=0
+type_folder() {
+  local keys="$1" out="$CCSSH_STATE_DIR/folder.$$" pid waited=0
   ( printf '%b' "$keys" | script -q /dev/null /bin/bash "$driver" > "$out" 2>&1 ) &
   pid=$!
   while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$CCSSH_E2E_TIMEOUT" ]; do
@@ -192,28 +197,38 @@ type_path() {
   rm -f "$out"
 }
 
+first_repo="$(ccssh_list_repos "$HOST" 2>/dev/null | head -1)"
 first_dir="$(ssh -n "$HOST" "ls -1p $HOME_ON_HOST 2>/dev/null | grep '/\$' | head -1 | sed 's|/\$||'" 2>/dev/null)"
 
-if [ -n "$first_dir" ]; then
-  check "typing a name in full is taken as typed" \
-    "RESULT=[$HOME_ON_HOST/$first_dir]" "$(type_path "$first_dir\n")"
+if [ -n "$first_repo" ]; then
+  check "Enter takes the first suggestion" "RESULT=[$first_repo]" "$(type_folder "\n")"
 
-  # A prefix short enough to be unique completes on Tab, and lands ready to
-  # descend.
+  # The point of the change: no keystroke needed before typing.
+  needle="$(basename "$first_repo" | cut -c1-4)"
+  check "typing narrows the suggestions straight away" \
+    "RESULT=[$first_repo]" "$(type_folder "$needle\n")"
+
+  check "the down arrow moves through them" "absent" \
+    "$([ "$(type_folder "\033[B\n")" = "RESULT=[$first_repo]" ] && echo present || echo absent)"
+fi
+
+if [ -n "$first_dir" ]; then
+  # A line that looks like a path completes against the host, so somewhere that
+  # was never on the list is reachable without a separate step.
   prefix="$(printf '%s' "$first_dir" | cut -c1-3)"
   matches="$(ssh -n "$HOST" "ls -1p $HOME_ON_HOST 2>/dev/null | grep '/\$' | sed 's|/\$||' | grep -c \"^$prefix\"" 2>/dev/null)"
   if [ "$matches" = "1" ]; then
-    check "Tab completes a unique prefix" \
-      "RESULT=[$HOME_ON_HOST/$first_dir/]" "$(type_path "$prefix\t\n")"
+    check "a typed path completes against the host" \
+      "RESULT=[$HOME_ON_HOST/$first_dir]" "$(type_folder "$HOME_ON_HOST/$prefix\n")"
   fi
 
-  check "the first press of Down takes the first suggestion" \
-    "RESULT=[$HOME_ON_HOST/$first_dir]" "$(type_path "\033[B\n")"
+  check "something matching nothing is taken as typed" \
+    "RESULT=[ccssh-no-such-thing]" "$(type_folder "ccssh-no-such-thing\n")"
 
   # script sends a Ctrl-D before anything else; if that reached the buffer it
   # would match nothing, invisibly.
   check "control bytes never reach the buffer" \
-    "RESULT=[$HOME_ON_HOST/]" "$(type_path "\n")"
+    "RESULT=[$first_repo]" "$(type_folder "\n")"
 fi
 
 # --- forgetting -------------------------------------------------------------
