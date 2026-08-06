@@ -10,6 +10,10 @@ for suite in *_test.sh; do
   bash "$suite" || failed=1
 done
 
+# The end-to-end suite drives the real launcher on a real pty against a real
+# host, so it only runs when given one:
+#   CCSSH_E2E_HOST=my-vps tests/run.sh
+
 # Parse against the oldest bash we support. macOS still ships 3.2, so a bash 4+
 # construct that works on the author's machine would break for most users.
 checker=bash

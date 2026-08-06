@@ -316,6 +316,15 @@ of them without ccssh at all: `ssh host` then `tmux attach`.
 tests/run.sh
 ```
 
+The end-to-end suite drives the real launcher through a real pty against a real
+host, under `--dry-run` so nothing on the host changes:
+
+```sh
+CCSSH_E2E_HOST=my-vps tests/run.sh
+```
+
+It has been run against both a macOS and a Linux host.
+
 The credential and worktree tests guard security properties — that the refresh
 token is never forwarded, and that a branch name cannot escape the worktree
 root. Keep them passing.
