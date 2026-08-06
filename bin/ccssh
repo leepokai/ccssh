@@ -237,6 +237,8 @@ prepare_remote() {
 
   if [ "$CCSSH_DRY_RUN" = "1" ]; then
     local hours=''
+    [ -z "${CCSSH_MOSH_SERVER:-}" ] && command -v mosh >/dev/null 2>&1 &&
+      info "would install mosh on $host"
     hours="$(ccssh_read_credential 2>/dev/null | ccssh_credential_hours_left)" || true
     if [ -n "$hours" ]; then
       info "would forward credentials (access token valid for ${hours}h)"
@@ -250,11 +252,17 @@ prepare_remote() {
   ccssh_forward_credential "$host" ||
     say_warn "run 'claude' once on $host to log in"
 
-  # mosh is never installed unasked: it needs UDP 60000-61000 open, which on a
-  # VPS is a firewall change only the owner can make.
+  # Put mosh in place here too rather than saving it for --setup. It costs
+  # nothing to have — a blocked UDP port just falls back to ssh — and a host
+  # you only ever reach by connecting to it would otherwise never get it.
+  # Where the package manager needs root it asks first, and declining is fine.
   if [ -z "${CCSSH_MOSH_SERVER:-}" ] && command -v mosh >/dev/null 2>&1 &&
      ccssh_host_option "$host" useMosh true; then
-    say_info "tip: install mosh on $host and the session will reattach by itself"
+    if ccssh_install_mosh "$host"; then
+      say_ok "mosh installed on $host — keystrokes will echo locally"
+    else
+      say_info "carrying on over ssh"
+    fi
   fi
 }
 

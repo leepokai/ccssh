@@ -137,10 +137,11 @@ ccssh -v               show every step instead of one status line
 
 ## Setting a host up
 
-Connecting prepares a host as it goes — installing Claude Code and tmux if they
-are missing, sending a credential. `ccssh --setup my-vps` does the same work up
-front and then stops, which is nicer when a package install wants a sudo
-password and you would rather answer it now than halfway into starting work.
+Connecting prepares a host as it goes — installing Claude Code, tmux and mosh
+if they are missing, and sending a credential. `ccssh --setup my-vps` does the
+same work up front and then stops, which is nicer when a package install wants
+a sudo password and you would rather answer it now than halfway into starting
+work.
 
 ```
   Preparing my-vps
