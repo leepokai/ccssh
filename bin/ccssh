@@ -15,14 +15,16 @@ while [ -L "$_ccssh_source" ]; do
 done
 CCSSH_ROOT="$(cd -P "$(dirname "$_ccssh_source")/.." && pwd)"
 unset _ccssh_source _ccssh_dir
-for _module in lib hosts picker probe auth install folders worktree memory relay session; do
+for _module in lib hosts environments picker probe auth install folders worktree memory relay session; do
   # shellcheck source=/dev/null
   . "$CCSSH_ROOT/scripts/$_module.sh"
 done
 
 CCSSH_VERSION_STRING="0.1.0"
 CCSSH_DRY_RUN="${CCSSH_DRY_RUN:-0}"
-CCSSH_NEW_SESSION="${CCSSH_NEW_SESSION:-0}"
+# New by default, the way `claude` itself starts a new conversation unless you
+# ask for --continue or --resume.
+CCSSH_SESSION_MODE="${CCSSH_SESSION_MODE:-new}"
 CCSSH_TAKEOVER="${CCSSH_TAKEOVER:-0}"
 CCSSH_VERBOSE="${CCSSH_VERBOSE:-0}"
 
@@ -30,12 +32,15 @@ usage() {
   cat <<'EOF'
 ccssh — get to Claude Code on another machine, fast
 
-  ccssh                  pick a host, land where you left off
-  ccssh <host>           go straight there
-  ccssh <host>:<path>    go straight to a folder
-  ccssh -p               pick the folder again
+  ccssh                  pick an environment, land where you left off
+  ccssh <environment>    go straight to one you have named
+  ccssh <host>           go straight to a host
+  ccssh <host>:<path>    go straight to a directory
+  ccssh --save <name>    name where you are going, for next time
+  ccssh -c               continue the session you left there
+  ccssh -r               pick among the sessions open there
+  ccssh -p               pick the directory again
   ccssh -b               pick a branch or worktree too
-  ccssh --new            a separate session, alongside any already open
   ccssh --takeover       detach whoever else is attached
   ccssh --local          run Claude Code here
   ccssh --forget [host]  forget where you left off
@@ -43,8 +48,11 @@ ccssh — get to Claude Code on another machine, fast
   ccssh -v               show every step instead of one status line
   ccssh --version        print the version
 
-Each host remembers the folder you were last in, so getting back is one
-keystroke. Run it from anywhere — it has no opinion about your local directory.
+An environment is a name for a place you work: an SSH host, a directory on it,
+optionally a branch. Naming one is optional — a bare host works, and each host
+remembers the directory you were last in either way.
+
+Run ccssh from anywhere; it has no opinion about your local directory.
 EOF
 }
 
@@ -72,9 +80,18 @@ value_for() {
 }
 
 choose_host() {
-  local chosen host dir last label
+  local chosen host dir last label name env_host env_dir env_branch
 
   last="$(ccssh_memory_last_host)"
+
+  # Named environments first: someone wrote these down on purpose.
+  while IFS=$'	' read -r name env_host env_dir env_branch; do
+    [ -n "$name" ] || continue
+    label="◇ $name"
+    [ -n "$env_dir" ] && label="$label   $env_host · $env_dir"
+    [ -n "$env_branch" ] && label="$label · $env_branch"
+    add_choice "$label" "env:$name"
+  done < <(ccssh_environments)
 
   if [ -n "$last" ]; then
     dir="$(ccssh_memory_get "$last" | cut -f1)"
@@ -254,10 +271,7 @@ run_remote() {
   [ -n "$worktree" ] && workdir="$worktree"
   session="$(ccssh_session_name "$dir" "$branch")"
 
-  # --new picks the first unused suffix, so it lands beside anything already
-  # running here rather than joining it.
-  [ "$CCSSH_NEW_SESSION" = "1" ] &&
-    session="$(ccssh_session_free_name "$host" "$session")"
+  session="$(resolve_session "$host" "$session")" || exit 130
 
   # Catch a bad path here, where we can say which one and why, rather than
   # letting the remote shell fail with a bare "no such file or directory".
@@ -306,6 +320,47 @@ forget_host() {
   fi
 }
 
+# resolve_session <host> <base>
+#
+# A fresh session unless asked otherwise, mirroring `claude`: running it starts
+# a new conversation, and -c / -r are how you get back to an old one.
+resolve_session() {
+  local host="$1" base="$2" latest chosen name attached
+  local -a options=()
+
+  case "$CCSSH_SESSION_MODE" in
+    continue)
+      latest="$(ccssh_session_latest "$host" "$base")"
+      if [ -n "$latest" ]; then
+        printf '%s\n' "$latest"
+      else
+        say_info "nothing open there yet — starting a session"
+        printf '%s\n' "$base"
+      fi
+      ;;
+    resume)
+      while IFS=$'\t' read -r name attached; do
+        [ -n "$name" ] || continue
+        options+=("$name$([ "$attached" = "1" ] && printf '   (open elsewhere)')")
+      done < <(ccssh_session_list "$host")
+
+      if [ "${#options[@]}" -eq 0 ]; then
+        say_info "no sessions open on $host — starting one"
+        printf '%s\n' "$base"
+        return 0
+      fi
+
+      status_clear
+      chosen="$(ccssh_pick "Which session on $host?" "${options[@]}")" || return 1
+      [ -n "$chosen" ] || return 1
+      printf '%s\n' "${chosen%%   (open elsewhere)}"
+      ;;
+    *)
+      ccssh_session_free_name "$host" "$base"
+      ;;
+  esac
+}
+
 run_local() {
   command -v claude >/dev/null 2>&1 ||
     die "local" "claude is not installed here" "see https://claude.ai/install.sh"
@@ -316,7 +371,8 @@ run_local() {
 
 main() {
   local target='' explicit_path='' host dir branch='' worktree='' remembered
-  local pick_folder=0 pick_branch=0
+  local pick_folder=0 pick_branch=0 save_as='' environment=''
+  local env_host env_dir env_branch
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -326,9 +382,12 @@ main() {
       --dry-run)    CCSSH_DRY_RUN=1 ;;
       -p|--pick)    pick_folder=1 ;;
       -b|--branch)  pick_branch=1 ;;
-      --new)        CCSSH_NEW_SESSION=1 ;;
-      -v|--verbose) CCSSH_VERBOSE=1 ;;
+      -c|--continue) CCSSH_SESSION_MODE=continue ;;
+      -r|--resume)   CCSSH_SESSION_MODE=resume ;;
+      -v|--verbose)  CCSSH_VERBOSE=1 ;;
       --takeover)   CCSSH_TAKEOVER=1 ;;
+      --save)       shift; save_as="${1:-}"
+                    [ -n "$save_as" ] || die "usage" "--save needs a name" ;;
       --forget)     shift; forget_host "${1:-}"; exit 0 ;;
       -*)           usage; die "usage" "unknown option: $1" ;;
       *)            target="$1" ;;
@@ -344,13 +403,28 @@ main() {
   require_cmd ssh
   require_cmd python3 "install python3 locally to shape credentials"
 
-  if [ -n "$target" ]; then
-    host="$target"
-  else
-    host="$(choose_host)" || exit 130
+  if [ -z "$target" ]; then
+    target="$(choose_host)" || exit 130
+    [ -n "$target" ] || exit 130
   fi
-  [ -n "$host" ] || exit 130
-  [ "$host" = "local" ] && run_local
+  [ "$target" = "local" ] && run_local
+
+  # A name you wrote down wins over a bare host of the same name.
+  case "$target" in
+    env:*) environment="${target#env:}" ;;
+    *)     ccssh_environment "$target" >/dev/null 2>&1 &&
+             [ -n "$(ccssh_environment "$target")" ] && environment="$target" ;;
+  esac
+
+  if [ -n "$environment" ]; then
+    IFS=$'\t' read -r env_host env_dir env_branch <<<"$(ccssh_environment "$environment")"
+    [ -n "$env_host" ] || die "setup" "environment '$environment' has no sshHost"
+    host="$env_host"
+    [ -n "$env_dir" ] && [ -z "$explicit_path" ] && explicit_path="$env_dir"
+    [ -n "$env_branch" ] && branch="$env_branch"
+  else
+    host="$target"
+  fi
 
   # Memory is local and instant, so read it first: the probe can then confirm
   # the folder and look for an open session in the same round trip.
@@ -390,6 +464,11 @@ main() {
   elif [ -n "$worktree" ] && ! ccssh_dir_exists "$host" "$worktree"; then
     warn "the remembered worktree is gone — using $dir instead"
     branch=''; worktree=''
+  fi
+
+  if [ -n "$save_as" ]; then
+    ccssh_environment_save "$save_as" "$host" "$dir" "$branch"
+    say_ok "saved environment '$save_as' — next time just: ccssh $save_as"
   fi
 
   run_remote "$host" "$dir" "$branch" "$worktree"

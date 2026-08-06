@@ -38,9 +38,26 @@ ccssh_session_clients() {
   " 2>/dev/null | tr -d ' '
 }
 
+# ccssh_session_list <host> [prefix]
+# "name<TAB>attached" for each matching session, most recently active first.
+ccssh_session_list() {
+  local host="$1" prefix="${2:-ccssh-}"
+
+  [ -n "${CCSSH_TMUX:-}" ] || return 0
+  ssh "$host" "$(ccssh_shq "$CCSSH_TMUX") list-sessions -F \
+    '#{session_activity}|#{session_name}|#{session_attached}'" 2>/dev/null |
+    awk -F'|' -v p="$prefix" '$2 ~ "^" p { print $1 "\t" $2 "\t" $3 }' |
+    sort -rn | cut -f2,3
+}
+
+# ccssh_session_latest <host> <base>
+# The most recently active session for this place, or nothing.
+ccssh_session_latest() {
+  ccssh_session_list "$1" "$2" | head -1 | cut -f1
+}
+
 # ccssh_session_free_name <host> <base>
-# base, base-2, base-3 … — the first with no session of that name, so --new
-# really does give you a separate one.
+# base, base-2, base-3 … — the first with no session of that name.
 ccssh_session_free_name() {
   local host="$1" base="$2" candidate n=1
 

@@ -70,17 +70,49 @@ because probing, credentials and git all share that single connection.
 ## Usage
 
 ```
-ccssh                  pick a host, land where you left off
-ccssh vps              go straight there
-ccssh vps:/srv/other   go straight to a folder
-ccssh -p               pick the folder again
+ccssh                  pick an environment, land where you left off
+ccssh drive-bridge     go straight to one you have named
+ccssh vps              go straight to a host
+ccssh vps:/srv/other   go straight to a directory
+ccssh --save <name>    name where you are going, for next time
+ccssh -c               continue the session you left there
+ccssh -r               pick among the sessions open there
+ccssh -p               pick the directory again
 ccssh -b               pick a branch or worktree too
-ccssh --new            a separate session, alongside any already open
 ccssh --takeover       detach whoever else is attached
 ccssh --local          run Claude Code here
 ccssh --forget [host]  forget where you left off
 ccssh -v               show every step instead of one status line
 ```
+
+## Environments
+
+An **environment** is a name for a place you work: an SSH host, a **directory**
+on it, optionally a **branch**. The words follow the desktop app, whose session
+objects carry exactly `name`, `sshHost` and `remoteCwd`.
+
+Name one as you go:
+
+```sh
+ccssh vps:/srv/drive-bridge --save drive-bridge
+```
+
+From then on `ccssh drive-bridge` goes straight there, and you have a word for
+it. They live in `~/.claude/ccssh/config.json`:
+
+```json
+{
+  "environments": {
+    "drive-bridge": { "sshHost": "vps", "directory": "/srv/drive-bridge" },
+    "api-staging":  { "sshHost": "vps", "directory": "/srv/api",
+                      "branch": "staging" }
+  }
+}
+```
+
+Naming is optional. A bare host still works, and every host remembers the
+directory you were last in either way. A name wins over a host of the same
+name — you wrote it down on purpose.
 
 Connecting prints a single line that rewrites itself and then gets out of the
 way. Anything that needs you — an install, a missing credential, an expiry
@@ -241,20 +273,26 @@ only you can make. If mosh cannot connect, ccssh falls back to ssh and says so.
 
 Opt out per host with `"useMosh": false`, or everywhere with `CCSSH_NO_MOSH=1`.
 
-## More than one session
+## Sessions
+
+**`ccssh` starts a new session**, the way running `claude` starts a new
+conversation rather than reopening your last one. Two terminals on the same
+directory get two sessions, not one shared screen.
+
+Getting back to an old one is explicit, and named after the flags `claude`
+already uses:
+
+| | |
+|---|---|
+| `ccssh -c` | continue the session you left there |
+| `ccssh -r` | list what is open there and pick one |
+
+`--takeover` detaches whoever else is attached, so tmux stops squeezing the
+window down to the smaller of the two terminals watching it.
 
 Sessions are named after the directory and branch, with the directory's path
-hashed in — so two repositories sharing a name never attach to each other's, and
-different folders or branches on one host are always separate.
-
-Running `ccssh` twice on the *same* folder joins the session already open rather
-than starting a second one. That is often what you want, from a phone or beside
-someone else, so it is the default — but ccssh says when it happens instead of
-letting you wonder why your terminal is echoing someone else. `--new` gives you
-a genuinely separate session; `--takeover` detaches the other terminal so the
-window is not squeezed down to the smaller of the two.
-
-You can reach any of them without ccssh at all: `ssh host` then `tmux attach`.
+hashed in, so two repositories sharing a name never collide. You can reach any
+of them without ccssh at all: `ssh host` then `tmux attach`.
 
 [mosh]: https://mosh.org
 
