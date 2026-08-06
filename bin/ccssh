@@ -139,7 +139,7 @@ choose_folder() {
   [ -n "$chosen" ] || exit 130
 
   if [ "$chosen" = "… type a path" ]; then
-    typed="$(ccssh_prompt "Path on $host:")" || exit 130
+    typed="$(ccssh_prompt_path "$host" "$CCSSH_HOME/")" || exit 130
     [ -n "$typed" ] || die "folder" "no path given"
     typed="$(ccssh_expand_home "$typed" "$CCSSH_HOME")"
     ccssh_dir_exists "$host" "$typed" ||

@@ -34,6 +34,18 @@ to it.
 Arrow keys or `j`/`k` to move, Enter to choose. With [fzf] installed you also get
 type-to-filter and mouse support.
 
+Typing a path is answered by the host as you go: what you have typed filters the
+directories that are really there, Tab completes, and the arrows walk the
+suggestions and put their choice on the line — so the line is never a lie about
+where you are heading.
+
+```
+  Path on vps: /home/me/pro
+
+      > projects/
+        prototypes/
+```
+
 [fzf]: https://github.com/junegunn/fzf
 
 ## What it does

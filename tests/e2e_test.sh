@@ -66,6 +66,7 @@ absent() {
 # Bounded: a menu waiting for a keystroke that never comes would otherwise hang
 # the suite forever rather than failing it.
 CCSSH_E2E_TIMEOUT="${CCSSH_E2E_TIMEOUT:-45}"
+HOME_ON_HOST="$(ssh -n "$HOST" 'printf %s "$HOME"' 2>/dev/null)"
 
 run() {
   local keys="$1"; shift
@@ -164,6 +165,56 @@ saw "-c runs" "$out" "connecting to $HOST"
 
 out="$(run '\n' "$HOST" -r)"
 saw "-r handles having nothing to resume" "$out" "connecting to $HOST"
+
+# --- typing a path ----------------------------------------------------------
+
+# Driving the path input directly: reaching it through the menu would make the
+# test about the menu instead.
+driver="$CCSSH_STATE_DIR/path-driver.sh"
+cat > "$driver" <<DRIVER
+cd "$PWD"
+. scripts/lib.sh
+. scripts/worktree.sh
+. scripts/picker.sh
+printf 'RESULT=[%s]\\n' "\$(ccssh_prompt_path "$HOST" "$HOME_ON_HOST/")"
+DRIVER
+
+type_path() {
+  local keys="$1" out="$CCSSH_STATE_DIR/path.$$" pid waited=0
+  ( printf '%b' "$keys" | script -q /dev/null /bin/bash "$driver" > "$out" 2>&1 ) &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$CCSSH_E2E_TIMEOUT" ]; do
+    sleep 1; waited=$((waited + 1))
+  done
+  kill -9 "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  tr -d '\r' < "$out" | grep -o 'RESULT=\[.*\]'
+  rm -f "$out"
+}
+
+first_dir="$(ssh -n "$HOST" "ls -1p $HOME_ON_HOST 2>/dev/null | grep '/\$' | head -1 | sed 's|/\$||'" 2>/dev/null)"
+
+if [ -n "$first_dir" ]; then
+  check "typing a name in full is taken as typed" \
+    "RESULT=[$HOME_ON_HOST/$first_dir]" "$(type_path "$first_dir\n")"
+
+  # A prefix short enough to be unique completes on Tab, and lands ready to
+  # descend.
+  prefix="$(printf '%s' "$first_dir" | cut -c1-3)"
+  matches="$(ssh -n "$HOST" "ls -1p $HOME_ON_HOST 2>/dev/null | grep '/\$' | sed 's|/\$||' | grep -c \"^$prefix\"" 2>/dev/null)"
+  if [ "$matches" = "1" ]; then
+    check "Tab completes a unique prefix" \
+      "RESULT=[$HOME_ON_HOST/$first_dir/]" "$(type_path "$prefix\t\n")"
+  fi
+
+  check "the first press of Down takes the first suggestion" \
+    "RESULT=[$HOME_ON_HOST/$first_dir]" "$(type_path "\033[B\n")"
+
+  # script sends a Ctrl-D before anything else; if that reached the buffer it
+  # would match nothing, invisibly.
+  check "control bytes never reach the buffer" \
+    "RESULT=[$HOME_ON_HOST/]" "$(type_path "\n")"
+fi
 
 # --- forgetting -------------------------------------------------------------
 
