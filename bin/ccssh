@@ -43,6 +43,7 @@ ccssh — get to Claude Code on another machine, fast
   ccssh -b               pick a branch or worktree too
   ccssh --takeover       detach whoever else is attached
   ccssh --local          run Claude Code here
+  ccssh --setup <host>   get a host ready in one go, then stop
   ccssh --forget [host]  forget where you left off
   ccssh --dry-run        walk through it, change nothing
   ccssh -v               show every step instead of one status line
@@ -354,6 +355,92 @@ resolve_session() {
   esac
 }
 
+# setup_host <host>
+#
+# Everything a host needs, in one pass, so the first real session has nothing
+# left to do. Connecting does all of this lazily anyway; this is for when you
+# would rather answer the sudo prompt now than halfway into starting work.
+setup_host() {
+  local host="$1" want_mosh
+
+  [ -n "$host" ] || die "usage" "--setup needs a host" "e.g. ccssh --setup my-vps"
+
+  require_cmd ssh
+  require_cmd python3 "install python3 locally to shape credentials"
+
+  log ""
+  info "Preparing $host"
+  log ""
+
+  ccssh_probe "$host" ||
+    die "connect" "cannot reach $host" "check it manually with: ssh $host"
+  ccssh_platform_supported ||
+    die "probe" "unsupported remote platform: ${CCSSH_OS:-unknown}" \
+      "ccssh supports Linux and macOS hosts"
+  say_ok "$CCSSH_OS $CCSSH_ARCH, home at $CCSSH_HOME"
+
+  [ -n "$CCSSH_PYTHON" ] ||
+    die "probe" "python3 is not installed on $host" \
+      "it is needed to install the credential safely"
+  say_ok "python3"
+
+  if [ -n "$CCSSH_GIT" ]; then
+    say_ok "git"
+  else
+    say_warn "no git — branch and worktree selection will be unavailable"
+  fi
+
+  if [ -n "$CCSSH_CLAUDE" ]; then
+    say_ok "claude $CCSSH_VERSION"
+    ccssh_report_version_drift "$host"
+  else
+    say_warn "installing Claude Code"
+    ccssh_install_claude "$host" ||
+      die "install" "the installer did not leave a working claude on $host" \
+        "install it by hand there, then run this again"
+    say_ok "claude ${CCSSH_VERSION:-installed}"
+  fi
+
+  if [ -n "$CCSSH_TMUX" ]; then
+    say_ok "tmux — sessions survive a dropped connection"
+  else
+    ccssh_install_tmux "$host" &&
+      say_ok "tmux installed" ||
+      say_warn "no tmux — a dropped connection will end the session"
+  fi
+
+  # mosh is worth it only when the round trip is long enough to feel, and it
+  # needs UDP 60000-61000 open, so it is asked for rather than assumed.
+  if [ -n "$CCSSH_MOSH_SERVER" ]; then
+    command -v mosh >/dev/null 2>&1 &&
+      say_ok "mosh — keystrokes echo locally, and a dropped network reattaches itself" ||
+      say_warn "$host has mosh but this machine does not: brew install mosh"
+  elif command -v mosh >/dev/null 2>&1; then
+    log ""
+    info "mosh shows your keystrokes before the host answers, which is worth"
+    info "having on a link with any real latency. It needs UDP 60000-61000"
+    info "reachable — on a VPS that is a firewall change only you can make."
+    want_mosh="$(ccssh_prompt "Install mosh on $host too? [y/N]")" || want_mosh=''
+    case "$want_mosh" in
+      y|Y|yes|Yes)
+        ccssh_install_mosh "$host" &&
+          say_ok "mosh installed" ||
+          say_warn "could not install mosh — ssh will be used"
+        ;;
+      *) say_info "skipped mosh — ssh will be used" ;;
+    esac
+  else
+    say_info "no mosh here; 'brew install mosh' on both ends makes typing feel local"
+  fi
+
+  ccssh_forward_credential "$host" ||
+    say_warn "no credential sent — run 'claude' once on $host to sign in"
+
+  log ""
+  say_ok "$host is ready"
+  info "  ccssh $host"
+}
+
 run_local() {
   command -v claude >/dev/null 2>&1 ||
     die "local" "claude is not installed here" "see https://claude.ai/install.sh"
@@ -381,6 +468,7 @@ main() {
       --takeover)   CCSSH_TAKEOVER=1 ;;
       --save)       shift; save_as="${1:-}"
                     [ -n "$save_as" ] || die "usage" "--save needs a name" ;;
+      --setup)      shift; setup_host "${1:-}"; exit 0 ;;
       --forget)     shift; forget_host "${1:-}"; exit 0 ;;
       -*)           usage; die "usage" "unknown option: $1" ;;
       *)            target="$1" ;;

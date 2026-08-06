@@ -108,8 +108,9 @@ done
 if command -v ccssh >/dev/null 2>&1; then
   note "Ready: $(ccssh --version)"
   note ""
-  note "  ccssh              pick a host and go"
-  note "  ccssh --dry-run    walk through it without changing anything"
+  note "  ccssh                 pick a host and go"
+  note "  ccssh --setup <host>  get a host ready in one go"
+  note "  ccssh --dry-run       walk through it without changing anything"
 else
   note "Installed, but ccssh is not resolving yet — open a new shell."
 fi

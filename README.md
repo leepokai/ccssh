@@ -127,10 +127,42 @@ ccssh -r               pick among the sessions open there
 ccssh -p               pick the directory again
 ccssh -b               pick a branch or worktree too
 ccssh --takeover       detach whoever else is attached
+ccssh --setup <host>   get a host ready in one go, then stop
 ccssh --local          run Claude Code here
 ccssh --forget [host]  forget where you left off
 ccssh -v               show every step instead of one status line
 ```
+
+## Setting a host up
+
+Connecting prepares a host as it goes — installing Claude Code and tmux if they
+are missing, sending a credential. `ccssh --setup my-vps` does the same work up
+front and then stops, which is nicer when a package install wants a sudo
+password and you would rather answer it now than halfway into starting work.
+
+```
+  Preparing my-vps
+
+  ✓ Linux x86_64, home at /home/me
+  ✓ python3
+  ✓ git
+  ✓ claude 2.1.223
+  ✓ tmux — sessions survive a dropped connection
+  ✓ mosh installed
+  ✓ credentials valid 7.2h
+
+  ✓ my-vps is ready
+    ccssh my-vps
+```
+
+Package installs go through brew where it exists, and apt / dnf / yum / pacman
+/ apk / zypper otherwise — those need root, so it asks first.
+
+Only mosh is opt-in, because it needs UDP 60000-61000 reachable and on a VPS
+that is a firewall change only you can make. It earns its place on a link with
+real latency: it shows your keystrokes before the host answers, so typing feels
+local, and it reattaches by itself when the network drops. On a host a
+millisecond away it changes nothing worth having.
 
 ## Environments
 
