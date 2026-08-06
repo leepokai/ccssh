@@ -1,6 +1,6 @@
 # ccssh
 
-Pick a remote host, a folder and a branch — then run Claude Code there.
+Get to Claude Code on another machine, fast.
 
 The Claude Code **desktop** app can open a session on a remote machine over SSH
 without making you log in again. The **CLI** cannot. `ccssh` adds that.
@@ -10,17 +10,21 @@ $ ccssh
 
   Where do you want to work?
 
-  › ★ dev-box · drive-bridge · dev/kevin
+  › ★ vps        /srv/app
+    ◆ build-01   /home/me/code/thing
+    ◆ dev-box
     ▪ Local
-    ◆ vps
-    ◆ build-01
 
-  connecting to dev-box…
-  ✓ claude 2.1.4 on dev-box
+  connecting to vps…
+  ✓ claude 2.1.4 on vps
   ✓ credentials forwarded (valid for 6.6h)
 
-  [Claude Code starts on dev-box]
+  [Claude Code starts on vps, in /srv/app]
 ```
+
+Each host remembers the folder you were last in, so getting back is one
+keystroke — `ccssh vps` skips the menu entirely. Run it from anywhere: ccssh has
+no opinion about your local directory and keeps no mapping to it.
 
 Arrow keys or `j`/`k` to move, Enter to choose. With [fzf] installed you also get
 type-to-filter and mouse support.
@@ -33,10 +37,10 @@ type-to-filter and mouse support.
 - Installs Claude Code on the remote the first time, using the official installer
 - Forwards your login so you never sign in on the remote (see [Credentials](#credentials))
 - Offers the git repositories it finds there, or takes a path you type
-- Offers the branch: the checkout as it stands, an existing worktree, or a new one
+- Offers a branch or worktree when you ask for one with `-b`
 - Wraps the session in tmux — installing it if the host lacks it — so a dropped
   connection does not lose your work, and uses mosh where the host has it
-- Remembers, per local project directory, where you last worked
+- Remembers, per host, the folder you were last in
 
 ## Install
 
@@ -66,10 +70,13 @@ because probing, credentials and git all share that single connection.
 ## Usage
 
 ```
-ccssh              choose where to work
-ccssh dev-box     go straight to a host
-ccssh --local      run Claude Code here
-ccssh --forget     forget what this project remembers
+ccssh                  pick a host, land where you left off
+ccssh vps              go straight there
+ccssh vps:/srv/other   go straight to a folder
+ccssh -p               pick the folder again
+ccssh -b               pick a branch or worktree too
+ccssh --local          run Claude Code here
+ccssh --forget [host]  forget where you left off
 ```
 
 `ccssh` runs *before* Claude Code and hands the terminal over to it, so there is

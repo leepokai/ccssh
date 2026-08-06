@@ -25,17 +25,20 @@ CCSSH_DRY_RUN="${CCSSH_DRY_RUN:-0}"
 
 usage() {
   cat <<'EOF'
-ccssh — SSH sessions for the Claude Code CLI
+ccssh — get to Claude Code on another machine, fast
 
-  ccssh                choose where to work
-  ccssh <host>         go straight to a host
-  ccssh --local        run Claude Code here
-  ccssh --dry-run      walk through the choices, change nothing
-  ccssh --forget       forget what this project remembers
-  ccssh --version      print the version
+  ccssh                  pick a host, land where you left off
+  ccssh <host>           go straight there
+  ccssh <host>:<path>    go straight to a folder
+  ccssh -p               pick the folder again
+  ccssh -b               pick a branch or worktree too
+  ccssh --local          run Claude Code here
+  ccssh --forget [host]  forget where you left off
+  ccssh --dry-run        walk through it, change nothing
+  ccssh --version        print the version
 
-Where you last worked on a project is remembered per directory, so running
-ccssh again from the same folder offers that host, directory and branch first.
+Each host remembers the folder you were last in, so getting back is one
+keystroke. Run it from anywhere — it has no opinion about your local directory.
 EOF
 }
 
@@ -63,21 +66,26 @@ value_for() {
 }
 
 choose_host() {
-  local chosen host recalled_label=''
+  local chosen host dir last label
 
-  if [ -n "$recalled_host" ]; then
-    recalled_label="★ $recalled_host · $(basename "$recalled_dir")"
-    [ -n "$recalled_branch" ] && recalled_label="$recalled_label · $recalled_branch"
-    add_choice "$recalled_label" "resume"
+  last="$(ccssh_memory_last_host)"
+
+  if [ -n "$last" ]; then
+    dir="$(ccssh_memory_get "$last" | cut -f1)"
+    label="★ $last"
+    [ -n "$dir" ] && label="$label   $dir"
+    add_choice "$label" "$last"
   fi
 
-  add_choice "▪ Local" "local"
-
-  while IFS= read -r host; do
+  while IFS=$'	' read -r host dir; do
     [ -n "$host" ] || continue
-    [ "$host" = "$recalled_host" ] && continue
-    add_choice "◆ $host" "$host"
-  done < <(ccssh_list_hosts)
+    [ "$host" = "$last" ] && continue
+    label="◆ $host"
+    [ -n "$dir" ] && label="$label   $dir"
+    add_choice "$label" "$host"
+  done < <(ccssh_list_hosts | ccssh_memory_annotate)
+
+  add_choice "▪ Local" "local"
 
   if [ "${#labels[@]}" -le 1 ]; then
     die "setup" "no SSH hosts found in ~/.ssh/config" \
@@ -249,7 +257,7 @@ run_remote() {
     if [ "$CCSSH_FORWARDED" = "1" ] && ! ccssh_renewal_enabled "$host"; then
       info "would relay renewed tokens every $((CCSSH_RELAY_INTERVAL / 60))m while the session runs"
     fi
-    info "would remember: $host  $dir${branch:+  ($branch)}"
+    info "would remember for $host: $dir${branch:+  ($branch)}"
     info "would run: ssh -t $host \"$(ccssh_remote_command "$workdir" "$session")\""
     info "persistence: $(ccssh_multiplexer)"
     log ""
@@ -257,7 +265,7 @@ run_remote() {
     return 0
   fi
 
-  ccssh_memory_put "$PWD" "$host" "$dir" "$branch" "$worktree"
+  ccssh_memory_put "$host" "$dir" "$branch" "$worktree"
 
   # While the session runs, keep the remote in step with whatever token this
   # machine holds. Pointless when the remote renews itself, and nothing to
@@ -275,6 +283,16 @@ run_remote() {
   exit "$status"
 }
 
+forget_host() {
+  local host="${1:-}" result
+  result="$(ccssh_memory_forget "$host")"
+  if [ -n "$host" ]; then
+    ok "forgot $host"
+  else
+    ok "forgot ${result:-0} host(s)"
+  fi
+}
+
 run_local() {
   command -v claude >/dev/null 2>&1 ||
     die "local" "claude is not installed here" "see https://claude.ai/install.sh"
@@ -284,69 +302,72 @@ run_local() {
 # --- entry point ------------------------------------------------------------
 
 main() {
-  local target='' host dir branch='' worktree='' selection recalled
+  local target='' explicit_path='' host dir branch='' worktree='' remembered
+  local pick_folder=0 pick_branch=0
 
-  case "${1:-}" in
-    -h|--help)    usage; exit 0 ;;
-    --version)    printf 'ccssh %s\n' "$CCSSH_VERSION_STRING"; exit 0 ;;
-    --local)      run_local ;;
-    --dry-run)    CCSSH_DRY_RUN=1; shift; target="${1:-}" ;;
-    --forget)     ccssh_memory_forget "$PWD"; ok "forgot the connection for $PWD"; exit 0 ;;
-    -*)           usage; die "usage" "unknown option: $1" ;;
-    '')           ;;
-    *)            target="$1" ;;
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h|--help)    usage; exit 0 ;;
+      --version)    printf 'ccssh %s\n' "$CCSSH_VERSION_STRING"; exit 0 ;;
+      --local)      run_local ;;
+      --dry-run)    CCSSH_DRY_RUN=1 ;;
+      -p|--pick)    pick_folder=1 ;;
+      -b|--branch)  pick_branch=1 ;;
+      --forget)     shift; forget_host "${1:-}"; exit 0 ;;
+      -*)           usage; die "usage" "unknown option: $1" ;;
+      *)            target="$1" ;;
+    esac
+    shift
+  done
+
+  # host:/path goes straight there, skipping every prompt.
+  case "$target" in
+    *:*) explicit_path="${target#*:}"; target="${target%%:*}" ;;
   esac
 
   require_cmd ssh
   require_cmd python3 "install python3 locally to shape credentials"
 
-  recalled="$(ccssh_memory_get "$PWD")"
-  IFS=$'\t' read -r recalled_host recalled_dir recalled_branch recalled_worktree \
-    <<<"${recalled:-$'\t\t\t'}"
-
   if [ -n "$target" ]; then
-    selection="$target"
+    host="$target"
   else
-    selection="$(choose_host)" || exit 130
+    host="$(choose_host)" || exit 130
+  fi
+  [ -n "$host" ] || exit 130
+  [ "$host" = "local" ] && run_local
+
+  prepare_remote "$host"
+
+  remembered="$(ccssh_memory_get "$host")"
+  IFS=$'\t' read -r dir branch worktree <<<"${remembered:-$'\t\t'}"
+
+  # The remote home is only known once the probe has run, and a quoted ~ would
+  # reach the remote shell as a literal.
+  dir="$(ccssh_expand_home "$dir" "$CCSSH_HOME")"
+  worktree="$(ccssh_expand_home "$worktree" "$CCSSH_HOME")"
+
+  if [ -n "$explicit_path" ]; then
+    dir="$(ccssh_expand_home "$explicit_path" "$CCSSH_HOME")"
+    branch=''; worktree=''
+    ccssh_dir_exists "$host" "$dir" ||
+      die "folder" "$dir does not exist on $host"
+  elif [ "$pick_folder" = "1" ] || [ -z "$dir" ]; then
+    dir="$(choose_folder "$host")" || exit 130
+    branch=''; worktree=''
+  elif ! ccssh_dir_exists "$host" "$dir"; then
+    warn "$dir is gone on $host — choose another"
+    dir="$(choose_folder "$host")" || exit 130
+    branch=''; worktree=''
   fi
 
-  case "$selection" in
-    local)
-      run_local
-      ;;
-    resume)
-      host="$recalled_host"
-      branch="$recalled_branch"
-      prepare_remote "$host"
+  if [ "$pick_branch" = "1" ] && [ -n "$CCSSH_GIT" ] && ccssh_is_repo "$host" "$dir"; then
+    IFS=$'\t' read -r branch worktree < <(choose_branch "$host" "$dir")
+  elif [ -n "$worktree" ] && ! ccssh_dir_exists "$host" "$worktree"; then
+    warn "the remembered worktree is gone — using $dir instead"
+    branch=''; worktree=''
+  fi
 
-      # Older entries may hold a ~ path, and the remote home is only known
-      # once the probe has run.
-      dir="$(ccssh_expand_home "$recalled_dir" "$CCSSH_HOME")"
-      worktree="$(ccssh_expand_home "$recalled_worktree" "$CCSSH_HOME")"
-
-      if ! ccssh_dir_exists "$host" "$dir"; then
-        warn "the remembered folder $dir is gone — choose another"
-        dir="$(choose_folder "$host")" || exit 130
-        branch=''; worktree=''
-        if [ -n "$CCSSH_GIT" ] && ccssh_is_repo "$host" "$dir"; then
-          IFS=$'\t' read -r branch worktree < <(choose_branch "$host" "$dir")
-        fi
-      elif [ -n "$worktree" ] && ! ccssh_dir_exists "$host" "$worktree"; then
-        warn "the remembered worktree is gone — using $dir instead"
-        branch=''; worktree=''
-      fi
-      run_remote "$host" "$dir" "$branch" "$worktree"
-      ;;
-    *)
-      host="$selection"
-      prepare_remote "$host"
-      dir="$(choose_folder "$host")" || exit 130
-      if [ -n "$CCSSH_GIT" ] && ccssh_is_repo "$host" "$dir"; then
-        IFS=$'\t' read -r branch worktree < <(choose_branch "$host" "$dir")
-      fi
-      run_remote "$host" "$dir" "$branch" "$worktree"
-      ;;
-  esac
+  run_remote "$host" "$dir" "$branch" "$worktree"
 }
 
 main "$@"

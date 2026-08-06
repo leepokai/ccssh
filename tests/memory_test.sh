@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Tests for per-project connection memory.
+# Tests for what each host remembers.
+#
+# Keyed by host, not by local directory: running ccssh from anywhere should get
+# you back to where you left off on whichever host you pick.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -22,38 +25,45 @@ check() {
   fi
 }
 
-check "unknown project remembers nothing" "" "$(ccssh_memory_get /nope)"
+check "an unknown host remembers nothing" "" "$(ccssh_memory_get vps)"
+check "no last host before anything is used" "" "$(ccssh_memory_last_host)"
 
-ccssh_memory_put /home/x/proj mac-mini '~/projects/drive-bridge' \
-  dev/kevin '~/.ccssh-worktrees/drive-bridge-a1b2c3d4/dev-kevin'
-
+ccssh_memory_put vps /srv/app dev/kevin '/home/me/.ccssh-worktrees/app-a1b2/dev-kevin'
 check "round-trips a worktree entry" \
-  'mac-mini|~/projects/drive-bridge|dev/kevin|~/.ccssh-worktrees/drive-bridge-a1b2c3d4/dev-kevin' \
-  "$(ccssh_memory_get /home/x/proj | tr '\t' '|')"
+  '/srv/app|dev/kevin|/home/me/.ccssh-worktrees/app-a1b2/dev-kevin' \
+  "$(ccssh_memory_get vps | tr '\t' '|')"
 
-ccssh_memory_put /home/x/plain yuan-vm '~/src/api'
+ccssh_memory_put build-01 '/home/me/code/thing'
 check "round-trips an entry without a worktree" \
-  'yuan-vm|~/src/api||' \
-  "$(ccssh_memory_get /home/x/plain | tr '\t' '|')"
+  '/home/me/code/thing||' "$(ccssh_memory_get build-01 | tr '\t' '|')"
 
-ccssh_memory_put /home/x/proj hardcore2 '~/other'
-check "overwrites the earlier entry" \
-  'hardcore2|~/other||' \
-  "$(ccssh_memory_get /home/x/proj | tr '\t' '|')"
+check "the most recent host leads" "build-01" "$(ccssh_memory_last_host)"
 
-check "projects stay independent" \
-  'yuan-vm|~/src/api||' \
-  "$(ccssh_memory_get /home/x/plain | tr '\t' '|')"
+ccssh_memory_put vps /srv/other
+check "a host keeps only its latest folder" '/srv/other||' \
+  "$(ccssh_memory_get vps | tr '\t' '|')"
+check "hosts stay independent" '/home/me/code/thing||' \
+  "$(ccssh_memory_get build-01 | tr '\t' '|')"
+check "the last host follows the latest use" "vps" "$(ccssh_memory_last_host)"
 
-check "store is private" "600" \
-  "$(stat -f '%Lp' "$CCSSH_STATE_DIR/sessions.json" 2>/dev/null ||
-     stat -c '%a' "$CCSSH_STATE_DIR/sessions.json" 2>/dev/null)"
+check "annotates a host list in one pass" \
+  'vps	/srv/other
+build-01	/home/me/code/thing
+never-used	' \
+  "$(printf 'vps\nbuild-01\nnever-used\n' | ccssh_memory_annotate)"
 
-ccssh_memory_forget /home/x/proj
-check "forget clears one project" "" "$(ccssh_memory_get /home/x/proj)"
-check "forget leaves the others" \
-  'yuan-vm|~/src/api||' \
-  "$(ccssh_memory_get /home/x/plain | tr '\t' '|')"
+check "the store is private" "600" \
+  "$(stat -f '%Lp' "$CCSSH_STATE_DIR/hosts.json" 2>/dev/null ||
+     stat -c '%a' "$CCSSH_STATE_DIR/hosts.json" 2>/dev/null)"
+
+ccssh_memory_forget vps >/dev/null
+check "forgetting one host clears it" "" "$(ccssh_memory_get vps)"
+check "forgetting one host leaves the others" '/home/me/code/thing||' \
+  "$(ccssh_memory_get build-01 | tr '\t' '|')"
+check "forgetting the last host clears the pointer" "" "$(ccssh_memory_last_host)"
+
+check "forgetting everything reports the count" "1" "$(ccssh_memory_forget)"
+check "forgetting everything clears it" "" "$(ccssh_memory_get build-01)"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
