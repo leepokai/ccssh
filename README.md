@@ -39,11 +39,16 @@ repositories it found are there to begin with; typing narrows them straight
 away, with no keystroke needed first:
 
 ```
-  Folder on vps: api
+  Folder on vps: api                                              2/14
 
-      > /srv/api
-        /home/me/apiary
+  > /srv/api
+    /home/me/apiary
 ```
+
+The count on the right is how many match out of how many there are, the way
+lf and yazi both carry one. Matching is case-insensitive until you type a
+capital, which is what both call smart-case. What every candidate shares is
+dimmed, so your eye lands on the part that differs.
 
 A line starting with `/` or `~` completes against the host instead, so
 somewhere that was never on the list takes no extra step. Tab puts the

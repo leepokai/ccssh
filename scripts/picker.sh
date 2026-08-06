@@ -123,7 +123,7 @@ _ccssh_children() {
 ccssh_pick_folder() {
   local host="$1" home="$2"; shift 2
   local prompt="Folder on $host: "
-  local buffer='' ch rest dir base line i selected=0
+  local buffer='' ch rest dir base line i selected=0 total=0
   local -a suggestions=("$@") matches=()
 
   if ! { exec 3</dev/tty 4>/dev/tty; } 2>/dev/null; then
@@ -142,7 +142,18 @@ ccssh_pick_folder() {
 
   # A line that looks like a path is completed against the host; anything else
   # just narrows what was offered.
+  # Case-insensitive until you type a capital, which is what lf means by
+  # ignorecase plus smartcase, both on by default there.
+  _fold() {
+    case "$buffer" in
+      *[A-Z]*) printf '%s' "$1" ;;
+      *) printf '%s' "$1" | tr '[:upper:]' '[:lower:]' ;;
+    esac
+  }
+
   _refilter() {
+    local needle
+    needle="$(_fold "$buffer")"
     matches=()
     case "$buffer" in
       '~'*|/*)
@@ -151,37 +162,65 @@ ccssh_pick_folder() {
         base="${buffer##*/}"
         while IFS= read -r line; do
           [ -n "$line" ] || continue
-          case "$line" in
-            "$base"*) matches+=("${dir}${line}") ;;
+          case "$(_fold "$line")" in
+            "$(_fold "$base")"*) matches+=("${dir}${line}") ;;
           esac
         done < <(_ccssh_children "$host" "$dir")
+        total="${#matches[@]}"
         ;;
       *)
         for line in "${suggestions[@]}"; do
-          case "$line" in
-            *"$buffer"*) matches+=("$line") ;;
+          case "$(_fold "$line")" in
+            *"$needle"*) matches+=("$line") ;;
           esac
         done
+        total="${#suggestions[@]}"
         ;;
     esac
     selected=0
   }
 
+  # What every candidate shares, shown dim so the eye lands on the part that
+  # differs. lf abbreviates the common leading path rather than truncating
+  # blindly; the same idea, with colour instead of abbreviation.
+  _common() {
+    [ "${#matches[@]}" -gt 1 ] || { printf '\n'; return; }
+    printf '%s\n' "${matches[@]}" | _ccssh_common_prefix
+  }
+
   _draw() {
-    printf '\r\033[2K  %s%s%s%s' "$_c_dim" "$prompt" "$_c_reset" "$buffer" >&4
+    local shared width count rest pad
+    shared="$(_common)"
+    shared="${shared%/*}/"
+    [ "$shared" = "/" ] && shared=''
+    width="$(tput cols 2>/dev/null || echo 80)"
+
+    # A count, the way lf and fzf both carry one: how many of how many.
+    count="${#matches[@]}/${total}"
+    pad=$(( width - ${#prompt} - ${#buffer} - ${#count} - 4 ))
+    [ "$pad" -lt 1 ] && pad=1
+
+    printf '\r\033[2K  %s%s%s%s%*s%s%s%s' \
+      "$_c_dim" "$prompt" "$_c_reset" "$buffer" \
+      "$pad" '' "$_c_dim" "$count" "$_c_reset" >&4
     printf '\033[s\033[J' >&4
+
     for i in "${!matches[@]}"; do
       [ "$i" -ge 8 ] && break
+      rest="${matches[$i]#$shared}"
       if [ "$i" -eq "$selected" ]; then
-        printf '\n\033[2K      \033[36m>\033[0m \033[1m%s\033[0m' "${matches[$i]}" >&4
+        printf '\n\033[2K  \033[36m>\033[0m %s%s%s\033[1m%s\033[0m' \
+          "$_c_dim" "$shared" "$_c_reset" "$rest" >&4
       else
-        printf '\n\033[2K        \033[2m%s\033[0m' "${matches[$i]}" >&4
+        printf '\n\033[2K    %s%s%s%s%s' \
+          "$_c_dim" "$shared" "$_c_reset" "$_c_dim" "$rest" >&4
+        printf '\033[0m' >&4
       fi
     done
     [ "${#matches[@]}" -gt 8 ] &&
-      printf '\n\033[2K        \033[2m... %d more\033[0m' "$((${#matches[@]} - 8))" >&4
+      printf '\n\033[2K    %s%d more\033[0m' "$_c_dim" "$((${#matches[@]} - 8))" >&4
     [ "${#matches[@]}" -eq 0 ] &&
-      printf '\n\033[2K        \033[2m(nothing matching — Enter takes what you typed)\033[0m' >&4
+      printf '\n\033[2K    %sno match — Enter takes what you typed\033[0m' "$_c_dim" >&4
     printf '\033[u' >&4
   }
 
