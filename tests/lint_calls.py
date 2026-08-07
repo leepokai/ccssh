@@ -8,11 +8,26 @@ that way and printed "command not found" into the middle of the picker.
 import re
 import sys
 
-DEFINITION = re.compile(r"^\s*(_?ccssh_[a-z_]+)\s*\(\)")
+DEFINITION = re.compile(r"^\s*(_?[a-z][a-z0-9_]*)\s*\(\)")
+
+# Helpers whose names do not carry the prefix. Distinctive enough not to
+# collide with ordinary words in strings — which is why `log`, `info`, `ok`
+# and `warn` are deliberately left out.
+BARE = (
+    "ensure_state_dir",
+    "write_private",
+    "require_cmd",
+    "say_ok",
+    "say_warn",
+    "say_info",
+    "status_clear",
+)
 
 # A call, as opposed to a variable: not preceded by $ or {, and not followed by
 # = (an assignment) or ( (a definition).
-CALL = re.compile(r"(?<![\w${-])(_?ccssh_[a-z_]+)(?![\w(=])")
+CALL = re.compile(
+    r"(?<![\w${-])(_?ccssh_[a-z_]+|%s)(?![\w(=])" % "|".join(BARE)
+)
 DECLARATION = re.compile(r"^\s*(unset|local|export|readonly|declare|typeset)\s")
 
 

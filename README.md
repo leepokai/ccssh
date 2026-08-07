@@ -273,6 +273,12 @@ credential is a plain file, so signing in there does carry over.
 | `forwardAuth` | `true` | Send a credential at all |
 | `allowRenewal` | `false` | Also send the refresh token — read below |
 | `useMosh` | `true` | Use mosh when both ends have it |
+| `installMosh` | `true` | Offer to install mosh on this host |
+| `installTmux` | `true` | Offer to install tmux on this host |
+
+When an install needs root, ccssh asks. Answering `never` writes the matching
+`install…` key as `false`, so it stops asking for that host — set it back to
+`true` to change your mind.
 
 ### Why `allowRenewal` is off by default
 

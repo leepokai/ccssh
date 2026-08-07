@@ -53,7 +53,13 @@ ccssh_package_install_command() {
 # ccssh_install_package <host> <package> <purpose>
 # Best effort. Returns non-zero if the install did not happen.
 ccssh_install_package() {
-  local host="$1" package="$2" purpose="$3" spec kind command answer
+  local host="$1" package="$2" purpose="$3" spec kind command answer option
+
+  # "never" from a previous run is remembered here, so the same question is
+  # not put twice.
+  option="install$(printf '%s' "$package" |
+    awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }')"
+  ccssh_host_option "$host" "$option" true || return 1
 
   spec="$(ccssh_package_install_command "$host" "$package")"
   if [ -z "$spec" ]; then
@@ -70,9 +76,15 @@ ccssh_install_package() {
     log ""
     info "$package is missing on $host — $purpose"
     info "  sudo $command"
-    answer="$(ccssh_prompt "Install it? [y/N]")" || return 1
+    answer="$(ccssh_prompt "Install it? [y/N/never]")" || return 1
     case "$answer" in
       y|Y|yes|Yes) command="sudo $command" ;;
+      n[Ee][Vv][Ee][Rr]|N[Ee][Vv][Ee][Rr])
+        ccssh_host_option_set "$host" "$option" false
+        say_info "noted — $package will not be offered for $host again"
+        say_info "  undo with \"$option\": true in ~/.claude/ccssh/config.json"
+        return 1
+        ;;
       *) return 1 ;;
     esac
   else

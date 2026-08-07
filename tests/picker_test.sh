@@ -30,7 +30,18 @@ printf 'SELECTED=[%s] STATUS=%d\n' "$result" "$status"
 DRIVER
 
 # fzf would bypass the menu entirely, so make sure we exercise the fallback.
+# Allocating a pty right after another test released one occasionally comes up
+# empty, so a single retry keeps this from failing for reasons that have
+# nothing to do with the menu.
 run_menu() {
+  local result
+  result="$(_run_menu_once "$@")"
+  [ -n "$result" ] && { printf '%s' "$result"; return; }
+  sleep 1
+  _run_menu_once "$@"
+}
+
+_run_menu_once() {
   local keys="$1" out
   if script -q /dev/null /bin/echo probe >/dev/null 2>&1; then
     out="$(printf '%b' "$keys" | PATH=/usr/bin:/bin script -q /dev/null /bin/bash "$driver" 2>&1)"

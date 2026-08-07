@@ -145,6 +145,35 @@ sys.exit(0 if value else 1)
 ' "$config" "$host" "$key" "$default"
 }
 
+# ccssh_host_option_set <host> <key> <true|false>
+# Remembers an answer so the same question is not asked twice.
+ccssh_host_option_set() {
+  local config
+  ensure_state_dir
+  config="${CCSSH_STATE_DIR:-$HOME/.claude/ccssh}/config.json"
+  python3 -c '
+import json, os, sys
+
+path, host, key, value = sys.argv[1:5]
+
+try:
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+
+data.setdefault("hosts", {}).setdefault(host, {})[key] = value == "true"
+
+tmp = path + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(data, f, indent=2)
+os.replace(tmp, path)
+' "$config" "$1" "$2" "$3"
+}
+
 # Credential forwarding is opt-out per host, for machines you do not control.
 ccssh_forward_enabled() {
   ccssh_host_option "$1" forwardAuth true

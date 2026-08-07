@@ -4,6 +4,8 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=../scripts/lib.sh
+. scripts/lib.sh
 # shellcheck source=../scripts/auth.sh
 . scripts/auth.sh
 
@@ -105,6 +107,35 @@ check "detects a live token" "1" "$?"
 hours="$(printf '%s' '{"claudeAiOauth":{"expiresAt":'"$(( ($(date +%s) + 7200) * 1000 ))"'}}' \
   | ccssh_credential_hours_left)"
 check "reports hours until expiry" "2.0" "$hours"
+
+# Declining an install for good has to be remembered, or the same question
+# comes back on the next connection.
+CCSSH_STATE_DIR="$(mktemp -d)"
+check "an unanswered option defaults to asking" "asks" \
+  "$(ccssh_host_option demo installMosh true && echo asks || echo silent)"
+
+ccssh_host_option_set demo installMosh false
+check "a declined install stays declined" "silent" \
+  "$(ccssh_host_option demo installMosh true && echo asks || echo silent)"
+
+ccssh_host_option_set demo installMosh true
+check "and can be turned back on" "asks" \
+  "$(ccssh_host_option demo installMosh true && echo asks || echo silent)"
+
+# Other hosts and other options are untouched by it.
+ccssh_host_option_set demo installMosh false
+check "another host is unaffected" "asks" \
+  "$(ccssh_host_option other installMosh true && echo asks || echo silent)"
+check "another option on the same host is unaffected" "asks" \
+  "$(ccssh_host_option demo installTmux true && echo asks || echo silent)"
+
+# Writing one must not disturb what is already in the file.
+ccssh_host_option_set demo forwardAuth false
+check "an earlier answer survives a later one" "silent" \
+  "$(ccssh_host_option demo installMosh true && echo asks || echo silent)"
+check "and the new one took" "silent" \
+  "$(ccssh_forward_enabled demo && echo asks || echo silent)"
+rm -rf "$CCSSH_STATE_DIR"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
