@@ -213,6 +213,57 @@ ccssh_push_credential() {
     >/dev/null
 }
 
+# --- onboarding -------------------------------------------------------------
+
+# A valid credential is not enough on its own: without hasCompletedOnboarding
+# in ~/.claude.json, Claude Code decides it is a fresh install and runs the
+# onboarding flow, which asks you to sign in even though the credential works.
+# The desktop app copies .claude.json alongside the credential for this reason.
+#
+# Only the two onboarding keys are set, merged into whatever is already there.
+# The whole file is 50 KB of tips history and per-project state that belongs to
+# whichever machine wrote it.
+_CCSSH_ONBOARD_PY='
+import json, os, sys
+
+home = os.path.expanduser("~")
+path = os.path.join(home, ".claude.json")
+version = sys.argv[1] if len(sys.argv) > 1 else ""
+
+try:
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+
+changed = False
+if not data.get("hasCompletedOnboarding"):
+    data["hasCompletedOnboarding"] = True
+    changed = True
+if version and data.get("lastOnboardingVersion") != version:
+    data["lastOnboardingVersion"] = version
+    changed = True
+
+if changed:
+    tmp = path + ".ccssh-tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+    print("set")
+else:
+    print("kept")
+'
+
+# ccssh_mark_onboarded <host> <claude-version>
+ccssh_mark_onboarded() {
+  local host="$1" version="$2"
+  ssh -n -o ConnectTimeout="${CCSSH_CONNECT_TIMEOUT:-10}" "$host" \
+    "python3 -c '$_CCSSH_ONBOARD_PY' $(ccssh_shq "$version")" 2>/dev/null
+}
+
 # --- orchestration ----------------------------------------------------------
 
 # Forward the credential to <host>. Never fatal: on any failure the caller is
@@ -266,6 +317,8 @@ ccssh_forward_credential() {
     say_warn "both machines now share one rotating token; either may be logged out"
     return 0
   fi
+
+  ccssh_mark_onboarded "$host" "${CCSSH_VERSION%% *}" >/dev/null
 
   hours="$(printf '%s' "$raw" | ccssh_credential_hours_left)"
   if [ -n "$hours" ]; then

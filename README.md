@@ -218,6 +218,12 @@ token**, and writes only the short-lived access token to `~/.claude/` on the
 remote with `0600` permissions. It travels over stdin, never on a command line
 where the remote process list would expose it.
 
+It also marks the host as having finished onboarding. A valid credential alone
+is not enough: without `hasCompletedOnboarding` in `~/.claude.json`, Claude
+Code treats the host as a fresh install and asks you to sign in regardless.
+Only those two keys are set, merged into whatever is already there — the rest
+of that file is the host's own state.
+
 This mirrors what the desktop app does. It means a compromised remote yields a
 credential that expires on its own and cannot be renewed — but it is still your
 credential, on a machine whose administrator can read root-owned files.

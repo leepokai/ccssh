@@ -279,6 +279,37 @@ found="$(ssh -n "$HOST" "ls -1pAL $scratch/ 2>/dev/null" | grep -c '/$')"
 ssh -n "$HOST" "rm -rf $scratch" 2>/dev/null
 check "hidden and symlinked directories both list" "3" "$found"
 
+# --- onboarding -------------------------------------------------------------
+
+# A working credential is not enough: without hasCompletedOnboarding, Claude
+# Code decides it is a fresh install and asks you to sign in anyway.
+. scripts/probe.sh
+. scripts/auth.sh
+ccssh_probe "$HOST" >/dev/null 2>&1
+ccssh_mark_onboarded "$HOST" "${CCSSH_VERSION%% *}" >/dev/null 2>&1
+
+check "the host is marked as onboarded" "True" \
+  "$(ssh -n "$HOST" 'python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser(\"~/.claude.json\")) as f:
+        print(json.load(f).get(\"hasCompletedOnboarding\"))
+except Exception:
+    print(\"missing\")
+"' 2>/dev/null)"
+
+# Only those two keys — the rest of that file is the host's own state.
+before="$(ssh -n "$HOST" 'python3 -c "
+import json, os
+with open(os.path.expanduser(\"~/.claude.json\")) as f: print(len(json.load(f)))
+"' 2>/dev/null)"
+ccssh_mark_onboarded "$HOST" "${CCSSH_VERSION%% *}" >/dev/null 2>&1
+after="$(ssh -n "$HOST" 'python3 -c "
+import json, os
+with open(os.path.expanduser(\"~/.claude.json\")) as f: print(len(json.load(f)))
+"' 2>/dev/null)"
+check "nothing else in that file is disturbed" "$before" "$after"
+
 # --- forgetting -------------------------------------------------------------
 
 out="$(printf '' | CCSSH_STATE_DIR="$CCSSH_STATE_DIR" \
