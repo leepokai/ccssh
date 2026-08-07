@@ -276,9 +276,11 @@ credential is a plain file, so signing in there does carry over.
 | `installMosh` | `true` | Offer to install mosh on this host |
 | `installTmux` | `true` | Offer to install tmux on this host |
 
-When an install needs root, ccssh asks. Answering `never` writes the matching
-`install…` key as `false`, so it stops asking for that host — set it back to
-`true` to change your mind.
+When an install needs root, ccssh asks — and Enter installs. Anything worth
+asking about is worth having, so the answer that costs you something is the one
+you have to type: `n` skips it this time, `never` writes the matching `install…`
+key as `false` and stops asking for that host. Set it back to `true` to change
+your mind.
 
 ### Why `allowRenewal` is off by default
 

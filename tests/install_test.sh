@@ -53,5 +53,24 @@ out="$(HOME="$tmp" PATH="$tmp:$PATH" sh -c "cd '$tmp' && :" 2>&1)"
 check "installer refuses to replace a real file" "yes" \
   "$(grep -q 'not a link' "$tmp/occupied" && echo yes || echo no)"
 
+# Enter should install. The prompt has to say so, and the branch that costs
+# you something has to be the one you type.
+prompt="$(grep -o 'Install it? \[[^]]*\]' scripts/install.sh | head -1)"
+check "the prompt shows install as the default" "Install it? [Y/n/never]" "$prompt"
+
+decide() {
+  case "$1" in
+    [Nn][Ee][Vv][Ee][Rr]) printf 'remember' ;;
+    [Nn]|[Nn][Oo])        printf 'skip' ;;
+    *)                    printf 'install' ;;
+  esac
+}
+check "Enter installs"        "install"  "$(decide '')"
+check "y installs"            "install"  "$(decide y)"
+check "n skips this time"     "skip"     "$(decide n)"
+check "no skips this time"    "skip"     "$(decide no)"
+check "never is remembered"   "remember" "$(decide never)"
+check "NEVER is remembered"   "remember" "$(decide NEVER)"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

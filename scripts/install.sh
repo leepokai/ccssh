@@ -76,16 +76,22 @@ ccssh_install_package() {
     log ""
     info "$package is missing on $host — $purpose"
     info "  sudo $command"
-    answer="$(ccssh_prompt "Install it? [y/N/never]")" || return 1
+    # Enter installs. Anything worth asking about here is worth having, and
+    # the answer that costs you something should be the one you have to type.
+    answer="$(ccssh_prompt "Install it? [Y/n/never]")" || return 1
     case "$answer" in
-      y|Y|yes|Yes) command="sudo $command" ;;
-      n[Ee][Vv][Ee][Rr]|N[Ee][Vv][Ee][Rr])
+      [Nn][Ee][Vv][Ee][Rr])
         ccssh_host_option_set "$host" "$option" false
         say_info "noted — $package will not be offered for $host again"
         say_info "  undo with \"$option\": true in ~/.claude/ccssh/config.json"
         return 1
         ;;
-      *) return 1 ;;
+      [Nn]|[Nn][Oo])
+        return 1
+        ;;
+      *)
+        command="sudo $command"
+        ;;
     esac
   else
     info "installing $package on $host with brew"
